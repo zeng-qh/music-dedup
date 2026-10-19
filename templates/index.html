@@ -1,0 +1,226 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>音乐去重工具</title>
+<style>
+:root{
+  --primary:#4f6ef7; --primary-dark:#3a55d9;
+  --green:#16a34a; --green-bg:#f0fdf4;
+  --red:#dc2626; --red-bg:#fef2f2;
+  --text:#1e293b; --text-sub:#64748b;
+  --border:#e2e8f0; --card:#ffffff; --bg:#f1f5f9;
+  --radius:12px; --shadow:0 1px 3px rgba(15,23,42,.08),0 4px 16px rgba(15,23,42,.05);
+}
+*{box-sizing:border-box}
+body{font-family:-apple-system,"PingFang SC","Microsoft YaHei",system-ui,sans-serif;
+  margin:0;background:var(--bg);color:var(--text);line-height:1.6}
+/* ---------- 头部 ---------- */
+header{background:linear-gradient(135deg,#4f6ef7 0%,#7c3aed 100%);
+  color:#fff;padding:28px 32px 64px;position:relative}
+header h1{font-size:22px;margin:0;display:flex;align-items:center;gap:10px;font-weight:700}
+header .sub{font-size:13px;opacity:.85;margin-top:6px}
+.stats{display:flex;gap:16px;margin-top:20px;flex-wrap:wrap}
+.stat{background:rgba(255,255,255,.14);backdrop-filter:blur(8px);
+  border:1px solid rgba(255,255,255,.2);border-radius:var(--radius);
+  padding:10px 20px;min-width:110px}
+.stat .num{font-size:24px;font-weight:700;line-height:1.2}
+.stat .label{font-size:12px;opacity:.85}
+/* ---------- 控制栏 ---------- */
+.controls{max-width:1100px;margin:-36px auto 0;padding:0 24px;position:relative;z-index:2}
+.controls-inner{background:var(--card);border-radius:var(--radius);box-shadow:var(--shadow);
+  padding:16px 20px;display:flex;gap:14px;align-items:center;flex-wrap:wrap}
+button{background:var(--primary);color:#fff;border:none;padding:10px 22px;
+  border-radius:10px;cursor:pointer;font-size:14px;font-weight:500;
+  transition:all .2s;display:inline-flex;align-items:center;gap:6px}
+button:hover{background:var(--primary-dark);transform:translateY(-1px);
+  box-shadow:0 4px 12px rgba(79,110,247,.35)}
+button:disabled{background:#c7d2fe;cursor:not-allowed;transform:none;box-shadow:none}
+button.danger{background:var(--red)}
+button.danger:hover{background:#b91c1c;box-shadow:0 4px 12px rgba(220,38,38,.35)}
+label.th-label{font-size:13px;color:var(--text-sub)}
+input[type=number]{width:76px;padding:8px 10px;border:1px solid var(--border);
+  border-radius:8px;font-size:14px;color:var(--text);outline:none;transition:border .2s}
+input[type=number]:focus{border-color:var(--primary)}
+#progress{color:var(--text-sub);font-size:13px;display:flex;align-items:center;gap:8px}
+.spinner{width:16px;height:16px;border:2px solid #c7d2fe;border-top-color:var(--primary);
+  border-radius:50%;animation:spin .7s linear infinite;display:none}
+@keyframes spin{to{transform:rotate(360deg)}}
+/* ---------- 主体 ---------- */
+main{max-width:1100px;margin:24px auto;padding:0 24px}
+.section-title{font-size:16px;font-weight:700;margin:28px 4px 14px;display:flex;align-items:center;gap:8px}
+.section-title .dot{width:8px;height:8px;border-radius:50%}
+.card{background:var(--card);border-radius:var(--radius);box-shadow:var(--shadow);
+  margin-bottom:16px;overflow:hidden;transition:box-shadow .2s}
+.card:hover{box-shadow:0 2px 6px rgba(15,23,42,.1),0 8px 24px rgba(15,23,42,.08)}
+.card-head{padding:14px 20px;display:flex;align-items:center;gap:12px;cursor:pointer;
+  user-select:none;border-bottom:1px solid var(--border);background:#fafbfc}
+.card-head:hover{background:#f4f6fa}
+.card-head .gname{font-weight:600;font-size:14px;flex:1;min-width:0;
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.card-head .arrow{color:var(--text-sub);transition:transform .25s;font-size:12px}
+.card.collapsed .arrow{transform:rotate(-90deg)}
+.card.collapsed .card-body{display:none}
+.card-head .selall{font-size:12px;color:var(--text-sub);display:flex;align-items:center;gap:4px;cursor:pointer}
+.card-body{padding:0}
+table{border-collapse:collapse;width:100%;font-size:13px}
+th{background:#f8fafc;color:var(--text-sub);font-weight:600;font-size:12px;
+  padding:10px 14px;text-align:left;border-bottom:1px solid var(--border)}
+td{padding:10px 14px;border-bottom:1px solid #f1f5f9;word-break:break-all;vertical-align:middle}
+tbody tr{transition:background .15s}
+tbody tr:hover{background:#f8faff}
+tbody tr:last-child td{border-bottom:none}
+tr.keep{background:var(--green-bg);box-shadow:inset 3px 0 0 var(--green)}
+tr.keep:hover{background:#e6f9ee}
+tr.del{box-shadow:inset 3px 0 0 #fca5a5}
+.badge{display:inline-block;padding:3px 10px;border-radius:999px;font-size:12px;font-weight:500;white-space:nowrap}
+.badge.keep{background:#dcfce7;color:#15803d}
+.badge.del{background:#fee2e2;color:#b91c1c}
+.path{font-family:"SF Mono",Consolas,monospace;font-size:12px;color:var(--text-sub)}
+.mono{font-family:"SF Mono",Consolas,monospace;font-size:12px}
+/* ---------- 空状态 ---------- */
+.empty{text-align:center;padding:48px 20px;color:var(--text-sub)}
+.empty .icon{font-size:40px;margin-bottom:10px}
+/* ---------- 底部删除栏 ---------- */
+#delBar{position:fixed;bottom:24px;left:50%;transform:translateX(-50%) translateY(80px);
+  background:#1e293b;color:#fff;border-radius:14px;padding:12px 20px;
+  display:flex;gap:14px;align-items:center;box-shadow:0 8px 30px rgba(15,23,42,.35);
+  transition:transform .3s;z-index:10;max-width:92vw}
+#delBar.show{transform:translateX(-50%) translateY(0)}
+#delBar .count{font-size:14px}
+#delBar .count b{color:#fca5a5;font-size:16px}
+#delBar .tip{font-size:12px;color:#94a3b8;display:none}
+@media(min-width:760px){#delBar .tip{display:inline}}
+/* ---------- Toast ---------- */
+#toast{position:fixed;top:20px;left:50%;transform:translateX(-50%) translateY(-80px);
+  background:#1e293b;color:#fff;padding:12px 22px;border-radius:10px;font-size:14px;
+  box-shadow:0 8px 30px rgba(15,23,42,.3);transition:transform .3s;z-index:20;max-width:90vw}
+#toast.show{transform:translateX(-50%) translateY(0)}
+footer{text-align:center;color:var(--text-sub);font-size:12px;padding:24px 0 90px}
+input[type=checkbox]{width:16px;height:16px;accent-color:var(--primary);cursor:pointer}
+</style>
+</head>
+<body>
+<header>
+  <h1>🎵 音乐去重工具</h1>
+  <div class="sub" id="rootInfo">扫描、对比、清理你的音乐库</div>
+  <div class="stats" id="stats" style="display:none">
+    <div class="stat"><div class="num" id="stFiles">0</div><div class="label">音频文件</div></div>
+    <div class="stat"><div class="num" id="stSim">0</div><div class="label">相似名分组</div></div>
+    <div class="stat"><div class="num" id="stHash">0</div><div class="label">哈希重复组</div></div>
+    <div class="stat"><div class="num" id="stSize">0</div><div class="label">可释放空间</div></div>
+  </div>
+</header>
+<div class="controls">
+  <div class="controls-inner">
+    <label class="th-label">相似度阈值</label>
+    <input type="number" id="th" value="0.85" min="0.5" max="1" step="0.05">
+    <button id="btnScan" onclick="startScan()">🔍 开始扫描</button>
+    <div id="progress"><span class="spinner" id="spinner"></span><span id="progressText"></span></div>
+  </div>
+</div>
+<main id="main">
+  <div class="card"><div class="empty"><div class="icon">🎧</div>
+    点击「开始扫描」分析音乐目录<br><small>扫描过程只读不写 · 删除需手动勾选确认 · 删除文件会先移入回收目录</small></div></div>
+</main>
+<div id="delBar">
+  <span class="count">已选 <b id="selCount">0</b> 个文件</span>
+  <button class="danger" onclick="doDelete()">🗑 删除选中</button>
+  <span class="tip">将移入 <code>.trash</code> 回收目录，确认无误后手动清空</span>
+</div>
+<div id="toast"></div>
+<footer>无损格式优先保留 · 哈希重复仅标记由用户判断</footer>
+<script>
+let result=null;
+const $=id=>document.getElementById(id);
+function esc(s){const d=document.createElement('div');d.textContent=s;return d.innerHTML;}
+function toast(msg,ms=3200){const t=$('toast');t.textContent=msg;t.classList.add('show');
+  clearTimeout(t._timer);t._timer=setTimeout(()=>t.classList.remove('show'),ms);}
+
+function startScan(){
+  $('btnScan').disabled=true;$('spinner').style.display='inline-block';
+  $('progressText').textContent='正在启动扫描…';
+  fetch('/api/scan',{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({threshold:parseFloat($('th').value)})})
+  .then(r=>r.json()).then(d=>{if(d.error){toast('⚠ '+d.error);resetBtn();}else poll();});
+}
+function resetBtn(){$('btnScan').disabled=false;$('spinner').style.display='none';}
+function poll(){
+  fetch('/api/status').then(r=>r.json()).then(d=>{
+    $('progressText').textContent=d.progress||'';
+    if(d.status==='done'){result=d.result;resetBtn();render();}
+    else if(d.status==='error'){toast('✕ 出错：'+d.progress,6000);resetBtn();}
+    else setTimeout(poll,800);
+  });
+}
+function rowFile(f,dup){
+  const keep=f.keep;
+  return `<tr class="${keep?'keep':'del'}">
+    <td><input type="checkbox" class="delbox" value="${esc(f.path)}" ${keep?'disabled':''} ${keep?'':'checked'} onchange="updateSel()"></td>
+    <td class="path">${esc(f.path)}</td>
+    <td>${f.ext||''}</td><td>${f.bitrate?f.bitrate+'kbps':'-'}</td>
+    <td>${f.size_h}</td>
+    <td><span class="badge ${keep?'keep':'del'}">${keep?'✓ 音质最高':dup?'⟲ 内容重复':'建议删除'}</span></td></tr>`;
+}
+function groupCard(title,tag,rows,withSelAll){
+  const head=`<div class="card-head" onclick="this.parentElement.classList.toggle('collapsed')">
+    <span class="gname" title="${esc(title)}">${esc(title)} <small style="color:var(--text-sub);font-weight:400">${tag}</small></span>
+    ${withSelAll?`<span class="selall" onclick="event.stopPropagation();toggleGroup(this)">全选反选</span>`:''}
+    <span class="arrow">▼</span></div>`;
+  return `<div class="card">${head}<div class="card-body"><table>
+    <tr><th style="width:40px"></th><th>路径</th><th>格式</th><th>码率</th><th>大小</th><th>建议</th></tr>
+    ${rows}</table></div></div>`;
+}
+function toggleGroup(el){
+  const box=el.closest('.card');
+  const boxes=[...box.querySelectorAll('.delbox:not(:disabled)')];
+  const anyChecked=boxes.some(b=>b.checked);
+  boxes.forEach(b=>b.checked=!anyChecked);
+  updateSel();
+}
+function updateSel(){
+  const n=[...document.querySelectorAll('.delbox:checked')].length;
+  $('selCount').textContent=n;
+  $('delBar').classList.toggle('show',n>0);
+}
+function render(){
+  const r=result;
+  $('rootInfo').textContent='目录：'+r.root;
+  $('stats').style.display='flex';
+  $('stFiles').textContent=r.total_files;
+  $('stSim').textContent=r.sim.length;
+  $('stHash').textContent=r.hash.length;
+  const bytes=[...r.sim.flat(),...r.hash.flat()].filter(f=>!f.keep)
+    .reduce((s,f)=>s+(f.size||0),0);
+  $('stSize').textContent=human(bytes);
+  let h='';
+  h+='<div class="section-title"><span class="dot" style="background:var(--primary)"></span>相似文件名 · 按音质排序</div>';
+  h+=r.sim.length?r.sim.map(g=>groupCard(g.name,`${g.files.length} 个文件`,
+    g.files.map(f=>rowFile(f,false)).join(''),true)).join('')
+    :`<div class="card"><div class="empty"><div class="icon">✨</div>未发现相似文件名</div></div>`;
+  h+='<div class="section-title"><span class="dot" style="background:var(--red)"></span>哈希完全重复 · MD5 相同</div>';
+  h+=r.hash.length?r.hash.map(g=>groupCard('MD5: '+g.md5,`${g.files.length} 个文件`,
+    g.files.map(f=>rowFile(f,true)).join(''),true)).join('')
+    :`<div class="card"><div class="empty"><div class="icon">✨</div>未发现完全重复文件</div></div>`;
+  $('main').innerHTML=h;
+  updateSel();
+}
+function human(n){for(const u of ['B','KB','MB','GB']){if(n<1024)return n.toFixed(1)+u;n/=1024;}return n.toFixed(1)+'TB';}
+function doDelete(){
+  const paths=[...document.querySelectorAll('.delbox:checked')].map(c=>c.value);
+  if(!paths.length)return;
+  if(!confirm(`确定将 ${paths.length} 个文件移入回收目录？`))return;
+  fetch('/api/delete',{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({paths})}).then(r=>r.json()).then(d=>{
+    toast(`✓ 已移入回收目录 ${d.moved.length} 个`+(d.failed.length?`，失败 ${d.failed.length} 个`:''),5000);
+    startScan();
+  });
+}
+// 页面加载时：若后台已有完成的扫描结果，直接恢复显示（刷新不丢结果）
+fetch('/api/status').then(r=>r.json()).then(d=>{
+  if(d.status==='done'){result=d.result;render();}
+});
+</script>
+</body>
+</html>

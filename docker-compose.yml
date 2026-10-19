@@ -1,0 +1,9 @@
+services:
+  music-dedup:
+    build: .
+    container_name: music-dedup
+    ports:
+      - "8321:8321"
+    volumes:
+      - /你的音乐目录:/music        # ← 改成飞牛里音乐的实际路径
+    restart: unless-stopped
