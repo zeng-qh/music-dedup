@@ -157,7 +157,7 @@ function poll(){
 function rowFile(f,dup){
   const keep=f.keep;
   return `<tr class="${keep?'keep':'del'}">
-    <td><input type="checkbox" class="delbox" value="${esc(f.path)}" ${keep?'disabled':''} ${keep?'':'checked'} onchange="updateSel()"></td>
+    <td><input type="checkbox" class="delbox" value="${esc(f.path)}" data-size="${f.size||0}" ${keep?'disabled':''} ${keep?'':'checked'} onchange="updateSel()"></td>
     <td class="path">${esc(f.path)}</td>
     <td>${f.ext||''}</td><td>${f.bitrate?f.bitrate+'kbps':'-'}</td>
     <td>${f.size_h}</td>
@@ -180,9 +180,13 @@ function toggleGroup(el){
   updateSel();
 }
 function updateSel(){
-  const n=[...document.querySelectorAll('.delbox:checked')].length;
+  const boxes=[...document.querySelectorAll('.delbox:checked')];
+  const n=boxes.length;
   $('selCount').textContent=n;
   $('delBar').classList.toggle('show',n>0);
+  // 可释放空间随勾选实时计算
+  const bytes=boxes.reduce((s,b)=>s+(+b.dataset.size||0),0);
+  $('stSize').textContent=human(bytes);
 }
 function render(){
   const r=result;
@@ -191,9 +195,6 @@ function render(){
   $('stFiles').textContent=r.total_files;
   $('stSim').textContent=r.sim.length;
   $('stHash').textContent=r.hash.length;
-  const bytes=[...r.sim.flat(),...r.hash.flat()].filter(f=>!f.keep)
-    .reduce((s,f)=>s+(f.size||0),0);
-  $('stSize').textContent=human(bytes);
   let h='';
   h+='<div class="section-title"><span class="dot" style="background:var(--primary)"></span>相似文件名 · 按音质排序</div>';
   h+=r.sim.length?r.sim.map(g=>groupCard(g.name,`${g.files.length} 个文件`,

@@ -138,8 +138,8 @@ def do_scan(threshold):
                 gs = sorted(g, key=lambda p: len(str(p)))
                 hash_dups.append({
                     "md5": h[:12],
-                    "files": [{"path": str(p), "size_h": human(size), "keep": i == 0}
-                              for i, p in enumerate(gs)]
+                    "files": [{"path": str(p), "size": size, "size_h": human(size),
+                               "keep": i == 0} for i, p in enumerate(gs)]
                 })
     return {"sim": sim, "hash": hash_dups, "total_files": len(files),
             "root": str(MUSIC_ROOT)}
