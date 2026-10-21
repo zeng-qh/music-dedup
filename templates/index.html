@@ -122,6 +122,12 @@ input[type=checkbox]{width:16px;height:16px;accent-color:var(--primary);cursor:p
   </div>
 </div>
 <main id="main">
+  <div class="card" id="histCard" style="display:none">
+    <div class="card-head" style="cursor:default">
+      <span class="gname">📜 历史扫描记录 <small style="color:var(--text-sub);font-weight:400">点击加载，免重新扫描</small></span>
+    </div>
+    <div class="card-body" id="histList" style="padding:8px 12px"></div>
+  </div>
   <div class="card"><div class="empty"><div class="icon">🎧</div>
     点击「开始扫描」分析音乐目录<br><small>扫描过程只读不写 · 删除需手动勾选确认 · 删除文件会先移入回收目录</small></div></div>
 </main>
@@ -238,10 +244,39 @@ function doDelete(){
     startScan();
   });
 }
-// 页面加载时：若后台已有完成的扫描结果，直接恢复显示（刷新不丢结果）
+// 页面加载时：优先恢复已完成的扫描，若扫描进行中则直接接续轮询
 fetch('/api/status').then(r=>r.json()).then(d=>{
   if(d.status==='done'){result=d.result;render();}
+  else if(d.status==='running'){
+    $('btnScan').disabled=true;$('spinner').style.display='inline-block';
+    $('btnCancel').style.display='inline-flex';
+    poll();
+  }
+  else loadHistory();
 });
+function loadHistory(){
+  fetch('/api/history').then(r=>r.json()).then(items=>{
+    if(!items.length)return;
+    $('histCard').style.display='block';
+    $('histList').innerHTML=items.map(it=>{
+      const t=new Date(it.finished*1000);
+      const ts=`${t.getMonth()+1}-${t.getDate()} ${String(t.getHours()).padStart(2,'0')}:${String(t.getMinutes()).padStart(2,'0')}`;
+      return `<div style="display:flex;align-items:center;gap:10px;padding:8px 6px;border-bottom:1px solid #f1f5f9;flex-wrap:wrap">
+        <button style="padding:5px 14px;font-size:13px" onclick="loadCache('${it.file}')">加载</button>
+        <span class="path" style="flex:1;min-width:200px">${esc(it.root)}</span>
+        <span style="font-size:12px;color:var(--text-sub)">阈值 ${it.threshold} · ${it.total_files} 文件 · 相似 ${it.sim_count} 组 · 重复 ${it.hash_count} 组 · ${ts}</span>
+      </div>`;
+    }).join('');
+  });
+}
+function loadCache(name){
+  fetch('/api/cache/'+name).then(r=>r.json()).then(d=>{
+    if(d.error)return toast('⚠ '+d.error);
+    return fetch('/api/status').then(r=>r.json()).then(d=>{
+      if(d.status==='done'){result=d.result;resetBtn();render();toast('已加载历史扫描结果');}
+    });
+  });
+}
 </script>
 </body>
 </html>

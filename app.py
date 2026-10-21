@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """音乐去重 Web 服务（Docker / 树莓派适用）"""
-import hashlib, os, re, shutil, threading, time
+import hashlib, json, os, re, shutil, threading, time
 from collections import defaultdict
 from difflib import SequenceMatcher
 from pathlib import Path
@@ -192,6 +192,68 @@ def do_scan(threshold):
             "root": str(MUSIC_ROOT), "finished_at": time.time()}
 
 
+# ---------- 扫描结果存档：下次免扫描 ----------
+DATA_DIR = Path(os.environ.get("DATA_DIR", "/app/data"))
+DATA_DIR.mkdir(parents=True, exist_ok=True)
+
+
+def archive_list():
+    """列出所有已存档的扫描记录（按时间倒序）"""
+    items = []
+    for f in DATA_DIR.glob("scan_*.json"):
+        try:
+            meta = json.loads(f.read_text(encoding="utf-8"))
+            items.append({
+                "file": f.name,
+                "root": meta.get("root", ""),
+                "threshold": meta.get("threshold", 0.85),
+                "finished": meta.get("finished_at", 0),
+                "total_files": meta.get("total_files", 0),
+                "sim_count": len(meta.get("sim", [])),
+                "hash_count": len(meta.get("hash", [])),
+            })
+        except Exception:
+            continue
+    items.sort(key=lambda x: -x["finished"])
+    return items
+
+
+def archive_save(result, threshold):
+    """按 目录+阈值 命名存档，同目录同阈值覆盖旧档"""
+    import hashlib as _h
+    key = _h.md5(f"{result['root']}|{threshold}".encode()).hexdigest()[:10]
+    f = DATA_DIR / f"scan_{key}.json"
+    tmp = f.with_suffix(".tmp")
+    tmp.write_text(json.dumps({**result, "threshold": threshold},
+                              ensure_ascii=False), encoding="utf-8")
+    tmp.replace(f)
+    return f.name
+
+
+@app.route("/api/history")
+def api_history():
+    return jsonify(archive_list())
+
+
+@app.route("/api/cache/<name>", methods=["GET"])
+def api_cache(name):
+    """加载一份存档结果，直接置为当前报告（免扫描）"""
+    if not re.fullmatch(r"scan_\w+\.json", name):
+        return jsonify({"error": "非法文件名"}), 400
+    f = DATA_DIR / name
+    if not f.exists():
+        return jsonify({"error": "存档不存在"}), 404
+    try:
+        data = json.loads(f.read_text(encoding="utf-8"))
+    except Exception as e:
+        return jsonify({"error": f"存档损坏: {e}"}), 500
+    state["result"] = data
+    state["progress"] = (f"已加载存档（{data.get('root','?')}，"
+                         f"扫描于 {time.strftime('%m-%d %H:%M', time.localtime(data.get('finished_at', 0)))}）")
+    state["status"] = "done"
+    return jsonify({"ok": True})
+
+
 @app.route("/")
 def index():
     # 页面是纯静态 HTML（含大量 CSS/JS 花括号），不经 Jinja 渲染
@@ -216,6 +278,10 @@ def api_scan():
             state["result"] = res
             state["progress"] = f"完成，用时 {res['finished_at'] - state['started_at']:.1f}s"
             state["status"] = "done"
+            try:
+                archive_save(res, threshold)
+            except Exception:
+                pass  # 存档失败不影响扫描结果展示
         except ScanCancelled:
             state["status"] = "idle"
             state["progress"] = "扫描已取消"

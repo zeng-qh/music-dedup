@@ -7,6 +7,7 @@ services:
       - "8321:8321"
     volumes:
       - /你的音乐目录:/music          # ← 改成飞牛里音乐的实际路径
+      - ./data:/app/data              # 扫描存档目录（持久化，重建容器不丢）
     environment:
       - MUSIC_ROOT=/music
     # 内存限制：Pi 4B 视版本 1G~8G，按需调整；超限时容器会以退出码 137 结束
