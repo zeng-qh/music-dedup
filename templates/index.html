@@ -184,10 +184,27 @@ function rowFile(f,dup){
   const keep=f.keep;
   return `<tr class="${keep?'keep':'del'}">
     <td><input type="checkbox" class="delbox" value="${esc(f.path)}" data-size="${f.size||0}" ${keep?'disabled':''} ${keep?'':'checked'} onchange="updateSel()"></td>
-    <td class="path">${esc(f.path)}</td>
+    <td class="path">${esc(f.path)}
+      <a href="javascript:void(0)" title="重命名" style="margin-left:6px;text-decoration:none"
+         onclick="renameFile('${esc(f.path).replace(/'/g,"\\'")}')">✏️</a></td>
     <td>${f.ext||''}</td><td>${f.bitrate?f.bitrate+'kbps':'-'}</td>
     <td>${f.size_h}</td>
     <td><span class="badge ${keep?'keep':'del'}">${keep?'✓ 音质最高':dup?'⟲ 内容重复':'建议删除'}</span></td></tr>`;
+}
+async function renameFile(oldPath){
+  const oldName=oldPath.split('/').pop();
+  const newName=prompt('修改文件名（可省略扩展名，将自动保留原扩展名）：',oldName);
+  if(!newName||newName===oldName)return;
+  try{
+    const r=await fetch('/api/rename',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({path:oldPath,new_name:newName})});
+    const d=await r.json();
+    if(d.error)return toast('⚠ '+d.error,5000);
+    if(d.unchanged)return;
+    toast('✓ 已重命名');
+    const s=await (await fetch('/api/status')).json();
+    if(s.status==='done'){result=s.result;render();}
+  }catch(e){toast('⚠ 请求失败',4000);}
 }
 function groupCard(title,tag,rows,withSelAll){
   const head=`<div class="card-head" onclick="this.parentElement.classList.toggle('collapsed')">

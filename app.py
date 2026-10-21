@@ -275,6 +275,7 @@ def api_scan():
     def run():
         try:
             res = do_scan(threshold)
+            res["threshold"] = threshold
             state["result"] = res
             state["progress"] = f"完成，用时 {res['finished_at'] - state['started_at']:.1f}s"
             state["status"] = "done"
@@ -345,6 +346,53 @@ def api_delete():
             fail.append({"path": s, "err": str(e)})
     return jsonify({"moved": ok, "failed": fail,
                     "note": f"已移入回收目录 {trash}，确认无误后可手动清空"})
+
+
+@app.route("/api/rename", methods=["POST"])
+def api_rename():
+    """重命名单个文件（仅改文件名，不换目录），并同步更新当前报告与存档"""
+    data = request.json or {}
+    old_path, new_name = data.get("path", ""), (data.get("new_name") or "").strip()
+    if not old_path or not new_name:
+        return jsonify({"error": "缺少参数"}), 400
+    p = Path(old_path)
+    # 安全校验：路径必须在音乐目录内
+    try:
+        p.resolve().relative_to(MUSIC_ROOT.resolve())
+    except ValueError:
+        return jsonify({"error": "路径越界"}), 400
+    if not p.is_file():
+        return jsonify({"error": "文件不存在"}), 404
+    # 新文件名校验：不允许路径分隔符，扩展名必须是音频格式（缺省则保留原扩展名）
+    if "/" in new_name or "\\" in new_name or new_name in (".", ".."):
+        return jsonify({"error": "文件名不能包含路径分隔符"}), 400
+    if Path(new_name).suffix.lower() not in AUDIO_EXTS:
+        new_name += p.suffix  # 自动补原扩展名
+    target = p.with_name(new_name)
+    if target == p:
+        return jsonify({"ok": True, "path": str(p), "unchanged": True})
+    if target.exists():
+        return jsonify({"error": f"目标已存在: {new_name}"}), 409
+    try:
+        p.rename(target)
+    except OSError as e:
+        return jsonify({"error": f"重命名失败: {e}"}), 500
+
+    # 同步更新内存中的报告与存档，免去重新扫描
+    old, new = str(p), str(target)
+    res = state.get("result")
+    if res:
+        for grp in res.get("sim", []) + res.get("hash", []):
+            for f in grp.get("files", []):
+                if f.get("path") == old:
+                    f["path"] = new
+                    if f.get("ext") is not None:
+                        f["ext"] = target.suffix.lower()
+        try:
+            archive_save(res, res.get("threshold", 0.85))
+        except Exception:
+            pass
+    return jsonify({"ok": True, "path": new})
 
 
 if __name__ == "__main__":
