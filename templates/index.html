@@ -122,9 +122,19 @@ a{color:inherit}
 .sidebar{
   background:var(--surface);border-right:1px solid var(--border);
   display:flex;flex-direction:column;
-  position:sticky;top:0;height:100vh;height:100dvh;overflow-y:auto;
+  position:sticky;top:0;height:100vh;height:100dvh;overflow:hidden;
   padding:0;
 }
+/* 品牌区固定顶部 */
+.brand{flex:none}
+/* 中间可滚动区：配置 + 导航 */
+.sidebar-scroll{
+  flex:1;min-height:0;overflow-y:auto;overscroll-behavior:contain;
+  scrollbar-width:thin;
+}
+.sidebar-scroll::-webkit-scrollbar{width:6px}
+.sidebar-scroll::-webkit-scrollbar-thumb{background:var(--n-200);border-radius:3px}
+.sidebar-scroll::-webkit-scrollbar-thumb:hover{background:var(--n-300)}
 .brand{display:flex;align-items:center;gap:10px;padding:20px 18px 16px}
 .brand-mark{
   width:30px;height:30px;border-radius:8px;flex:none;
@@ -158,7 +168,71 @@ a{color:inherit}
   color:var(--text-faint);font-variant-numeric:tabular-nums;
 }
 
-/* 阈值控制 */
+/* ---------- 过滤规则配置面板 ---------- */
+.cfg-toggle{
+  display:flex;align-items:center;gap:7px;width:100%;
+  padding:8px 9px;border-radius:var(--r-sm);
+  font-size:var(--t-xs);font-weight:500;color:var(--text-mid);
+  border:1px solid var(--border);background:var(--surface);
+  transition:background .15s var(--ease),color .15s var(--ease),border-color .15s var(--ease);
+}
+.cfg-toggle:hover{background:var(--n-50);color:var(--text);border-color:var(--border-strong)}
+.cfg-toggle .chev-cfg{margin-left:auto;transition:transform .22s var(--ease);color:var(--text-faint)}
+.cfg-toggle[aria-expanded="true"] .chev-cfg{transform:rotate(180deg)}
+.cfg-panel{
+  display:none;margin-top:8px;padding:2px 0 0;
+  border-left:1px solid var(--border);margin-left:9px;
+}
+.cfg-panel.open{display:block}
+.cfg-item{padding:9px 0 9px 12px}
+.cfg-item + .cfg-item{border-top:1px solid var(--n-100)}
+:root[data-theme="dark"] .cfg-item + .cfg-item{border-top-color:var(--n-800)}
+.cfg-row{display:flex;align-items:center;gap:8px}
+.cfg-name{font-size:var(--t-xs);font-weight:500;color:var(--text);flex:1;min-width:0}
+.cfg-desc{
+  font-size:11px;line-height:1.5;color:var(--text-faint);
+  margin-top:5px;padding-right:2px;
+}
+/* 开关 */
+.switch{position:relative;width:32px;height:18px;flex:none;cursor:pointer}
+.switch input{position:absolute;opacity:0;width:100%;height:100%;margin:0;cursor:pointer;z-index:1}
+.switch .track{
+  display:block;width:32px;height:18px;border-radius:9px;
+  background:var(--n-200);transition:background .2s var(--ease);
+}
+.switch .knob{
+  position:absolute;top:2px;left:2px;width:14px;height:14px;border-radius:50%;
+  background:var(--surface);box-shadow:var(--shadow-1);
+  transition:transform .2s var(--ease);
+}
+.switch input:checked ~ .track{background:var(--a-500)}
+.switch input:checked ~ .knob{transform:translateX(14px)}
+.switch input:focus-visible ~ .track{outline:2px solid var(--a-500);outline-offset:2px}
+:root[data-theme="dark"] .switch .knob{background:var(--n-100)}
+/* 下拉 */
+.cfg-select{
+  width:100%;margin-top:7px;height:30px;padding:0 8px;
+  border:1px solid var(--border-strong);border-radius:var(--r-sm);
+  background:var(--surface);font-size:var(--t-xs);color:var(--text);
+  transition:border-color .15s var(--ease);
+}
+.cfg-select:focus{outline:none;border-color:var(--a-500);box-shadow:0 0 0 3px var(--a-50)}
+.cfg-badge{
+  flex:none;margin-left:auto;padding:0 4px;height:15px;line-height:15px;
+  border-radius:4px;font-size:10px;font-weight:500;white-space:nowrap;
+  background:var(--n-100);color:var(--text-dim);
+}
+/* 有徽章时让箭头不再抢 auto 边距，避免标题被挤换行 */
+.cfg-toggle .cfg-badge + .chev-cfg{margin-left:5px;flex:none}
+.cfg-toggle > span{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0}
+.cfg-toggle > svg:first-child{flex:none}
+:root[data-theme="dark"] .cfg-badge{background:var(--n-800)}
+.cfg-reset{
+  margin-top:9px;font-size:11px;color:var(--text-dim);padding:4px 0;
+  display:flex;align-items:center;gap:4px;
+}
+.cfg-reset:hover{color:var(--a-500)}
+/* 配置区块容器 */
 .field{padding:0 18px 14px}
 .field label{display:block;font-size:var(--t-xs);font-weight:500;color:var(--text-mid);margin-bottom:7px}
 .field .hint{font-size:var(--t-xs);color:var(--text-faint);line-height:1.4;margin-top:6px}
@@ -543,15 +617,7 @@ dialog::backdrop{background:oklch(20% 0.01 258 / 0.45);backdrop-filter:blur(2px)
       </div>
     </div>
 
-    <div class="field">
-      <label for="th">相似度阈值</label>
-      <div class="slider-row">
-        <input type="range" id="th" min="0.60" max="0.98" step="0.01" value="0.85">
-        <span class="th-value tnum" id="thVal">0.85</span>
-      </div>
-      <div class="hint" id="thHint">越接近 1 越严格，只匹配几乎同名的文件</div>
-    </div>
-
+    <div class="sidebar-scroll">
     <div class="field">
       <button class="btn btn-primary" id="btnScan" onclick="startScan()">
         <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><circle cx="7" cy="7" r="4.5"/><path d="M10.5 10.5L14 14"/></svg>
@@ -562,6 +628,27 @@ dialog::backdrop{background:oklch(20% 0.01 258 / 0.45);backdrop-filter:blur(2px)
         <div class="progress-text" id="progressText"></div>
       </div>
       <button class="btn btn-ghost btn-sm" id="btnCancel" onclick="cancelScan()" style="display:none;width:100%;margin-top:8px">取消扫描</button>
+    </div>
+
+    <div class="field">
+      <label for="th">相似度阈值</label>
+      <div class="slider-row">
+        <input type="range" id="th" min="0.60" max="0.98" step="0.01" value="0.85">
+        <span class="th-value tnum" id="thVal">0.85</span>
+      </div>
+      <div class="hint" id="thHint">越接近 1 越严格，只匹配几乎同名的文件</div>
+    </div>
+
+    <!-- 过滤规则配置 -->
+    <div class="field">
+      <button class="cfg-toggle" id="cfgToggle" onclick="toggleCfg()" aria-expanded="false" aria-controls="cfgPanel">
+        <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round">
+          <path d="M2 4h12M2 8h12M2 12h12"/><circle cx="5" cy="4" r="1.6" fill="currentColor"/><circle cx="11" cy="8" r="1.6" fill="currentColor"/><circle cx="7" cy="12" r="1.6" fill="currentColor"/>
+        </svg>
+        <span>过滤规则配置</span>
+        <svg class="chev-cfg" width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M3.5 6L8 10.5 12.5 6"/></svg>
+      </button>
+      <div class="cfg-panel" id="cfgPanel"></div>
     </div>
 
     <nav class="nav-group" aria-label="筛选">
@@ -589,6 +676,8 @@ dialog::backdrop{background:oklch(20% 0.01 258 / 0.45);backdrop-filter:blur(2px)
       </div>
       <div id="histList" style="padding:0 0 4px"></div>
     </nav>
+
+    </div><!-- /sidebar-scroll -->
 
     <div class="sidebar-foot">
       <span class="foot-note" id="footNote">未扫描</span>
@@ -715,7 +804,113 @@ $('th').addEventListener('input', e => {
     : v >= 0.85 ? '较严格，匹配同一首歌的不同版本'
     : v >= 0.75 ? '适中，可能匹配到不同歌曲'
     : '宽松，容易误判不同歌曲';
+  saveCfg();
 });
+
+/* ================= 过滤规则配置 ================= */
+let CFG_SCHEMA = [];      // 服务端返回的规则定义
+let CFG_DEFAULTS = {};    // 默认值
+let CFG_LIVE = {};        // 现场版策略选项
+let cfg = {};             // 当前配置值
+
+function closeCfgHint(){}
+function toggleCfg(){
+  const btn = $('cfgToggle');
+  const open = btn.getAttribute('aria-expanded') === 'true';
+  btn.setAttribute('aria-expanded', String(!open));
+  $('cfgPanel').classList.toggle('open', !open);
+}
+
+function loadCfgLocal(){
+  try{
+    const s = localStorage.getItem('md-cfg');
+    if(s) cfg = { ...CFG_DEFAULTS, ...JSON.parse(s) };
+    else cfg = { ...CFG_DEFAULTS };
+  }catch(e){ cfg = { ...CFG_DEFAULTS }; }
+}
+function saveCfg(){
+  cfg.threshold = parseFloat($('th').value);
+  try{ localStorage.setItem('md-cfg', JSON.stringify(cfg)); }catch(e){}
+}
+function setCfg(key, val){
+  cfg[key] = val;
+  saveCfg();
+  renderCfgBadge();
+}
+
+function renderCfg(){
+  loadCfgLocal();
+  const panel = $('cfgPanel');
+  // 滑块同步到本地配置
+  $('th').value = cfg.threshold;
+  $('thVal').textContent = Number(cfg.threshold).toFixed(2);
+
+  panel.innerHTML = CFG_SCHEMA.filter(x => x.key !== 'threshold').map(item => {
+    if(item.type === 'switch'){
+      const on = !!cfg[item.key];
+      return `<div class="cfg-item">
+        <div class="cfg-row">
+          <span class="cfg-name">${esc(item.label)}</span>
+          <label class="switch">
+            <input type="checkbox" ${on?'checked':''} onchange="setCfg('${item.key}', this.checked)"
+                   aria-label="${esc(item.label)}">
+            <span class="track"></span><span class="knob"></span>
+          </label>
+        </div>
+        <div class="cfg-desc">${esc(item.desc)}</div>
+      </div>`;
+    }
+    if(item.type === 'select'){
+      const opts = Object.entries(CFG_LIVE).map(([k, d]) =>
+        `<option value="${k}" ${cfg[item.key]===k?'selected':''}>${esc(d.split('：')[0])}</option>`).join('');
+      const desc = CFG_LIVE[cfg[item.key]] || '';
+      return `<div class="cfg-item">
+        <div class="cfg-row"><span class="cfg-name">${esc(item.label)}</span></div>
+        <select class="cfg-select" onchange="setCfg('${item.key}', this.value); renderCfgDesc();" id="sel_${item.key}">${opts}</select>
+        <div class="cfg-desc">${esc(desc)}</div>
+      </div>`;
+    }
+    return '';
+  }).join('') + `<button class="cfg-reset" onclick="resetCfg()">
+      <svg width="11" height="11" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><path d="M14 8a6 6 0 1 1-1.8-4.3M14 2v4h-4"/></svg>
+      恢复默认设置</button>`;
+  renderCfgBadge();
+}
+function renderCfgDesc(){
+  const item = CFG_SCHEMA.find(x => x.key === 'live_policy');
+  const sel = $('sel_live_policy');
+  if(sel && item){
+    const descEl = sel.parentElement.querySelector('.cfg-desc');
+    if(descEl) descEl.textContent = CFG_LIVE[sel.value] || '';
+  }
+}
+function renderCfgBadge(){
+  // 统计有多少项偏离默认值，展示在按钮上
+  const changed = Object.keys(CFG_DEFAULTS).filter(k =>
+    k !== 'threshold' && cfg[k] !== CFG_DEFAULTS[k]).length
+    + (Number(cfg.threshold) !== CFG_DEFAULTS.threshold ? 1 : 0);
+  const btn = $('cfgToggle');
+  let badge = btn.querySelector('.cfg-badge');
+  if(changed > 0){
+    if(!badge){ badge = document.createElement('span'); badge.className = 'cfg-badge'; btn.insertBefore(badge, btn.querySelector('.chev-cfg')); }
+    badge.textContent = '已改' + changed;
+    badge.title = `已调整 ${changed} 项，与默认设置不同`;
+  } else if(badge){ badge.remove(); }
+}
+function resetCfg(){
+  cfg = { ...CFG_DEFAULTS };
+  saveCfg();
+  $('th').value = cfg.threshold;
+  $('thVal').textContent = Number(cfg.threshold).toFixed(2);
+  $('th').dispatchEvent(new Event('input'));
+  renderCfg();
+  toast('已恢复默认规则');
+}
+// 启动时拉取规则定义并渲染
+fetch('/api/options').then(r => r.json()).then(d => {
+  CFG_SCHEMA = d.schema; CFG_DEFAULTS = d.defaults; CFG_LIVE = d.live_policies;
+  renderCfg();
+}).catch(() => {});
 
 /* ================= 扫描 ================= */
 function setProgress(pct, text, indeterminate){
@@ -735,9 +930,10 @@ function startScan(){
   lastProgress = ''; lastChange = Date.now();
   $('main').innerHTML = Array(6).fill('<div class="skeleton sk-group"></div>').join('');
 
+  saveCfg();
   fetch('/api/scan', {
     method:'POST', headers:{'Content-Type':'application/json'},
-    body: JSON.stringify({ threshold: parseFloat($('th').value) })
+    body: JSON.stringify({ ...cfg, threshold: parseFloat($('th').value) })
   }).then(r => r.json()).then(d => {
     if(d.error){ toast(d.error, 'err'); resetScanBtn(); return; }
     poll();
@@ -844,10 +1040,14 @@ function render(){
   $('cntHash').textContent = fmtNum(result.hash.length);
   $('footNote').textContent = `${fmtNum(result.total_files)} 个文件`;
 
-  // 默认决策：所有非保留文件标记为删除
+  // 默认决策：按「默认勾选建议删除项」配置决定是否预选非推荐版本
+  const preselect = (result.options && result.options.preselect) !== false;
   selected.clear();
-  [...result.sim.flatMap(g=>g.files), ...result.hash.flatMap(g=>g.files)]
-    .forEach(f => { if(!f.keep) selected.add(f.path); });
+  if(preselect){
+    [...result.sim.flatMap(g=>g.files), ...result.hash.flatMap(g=>g.files)]
+      .forEach(f => { if(!f.keep) selected.add(f.path); });
+  }
+  // 不预选时 selected 为空，所有行显示为「保留」，由用户在界面上自行标记要删的
 
   $('main').innerHTML = `
     <div class="metrics">
@@ -1035,12 +1235,15 @@ function hideRow(btn){
 }
 function resetDecisions(){
   if(!result) return;
+  const preselect = (result.options && result.options.preselect) !== false;
   selected.clear();
-  [...result.sim.flatMap(g=>g.files), ...result.hash.flatMap(g=>g.files)]
-    .forEach(f => { if(!f.keep) selected.add(f.path); });
+  if(preselect){
+    [...result.sim.flatMap(g=>g.files), ...result.hash.flatMap(g=>g.files)]
+      .forEach(f => { if(!f.keep) selected.add(f.path); });
+  }
   renderList();
   updateBar();
-  toast('已恢复默认决策');
+  toast(preselect ? '已恢复默认决策' : '已清空所有选择');
 }
 function updateBar(){
   const n = selected.size;
