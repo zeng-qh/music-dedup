@@ -361,8 +361,14 @@ def qscore(path, info, opts):
     # 码率：整数位，最高 1536kbps 也不会溢出到无损位阶
     s += float(br or 0) * 10 ** 5
 
-    # 文件大小：0~900 区间，只做同码率下的微调
-    s += min(path.stat().st_size / (1024 * 1024), 900) * 10 ** 2
+    # 文件大小与时间：文件可能在扫描期间被外部删除（NAS/同步盘常见），
+    # 取不到就跳过这两项，不影响其余排序依据
+    try:
+        st = path.stat()
+        s += min(st.st_size / (1024 * 1024), 900) * 10 ** 2
+        mtime = st.st_mtime
+    except OSError:
+        mtime = 0
 
     # 路径偏好：纯小数位，只在以上全部相同时才决定胜负
     bias_mode = opts.get("path_bias", "short")
@@ -371,10 +377,7 @@ def qscore(path, info, opts):
     elif bias_mode == "long":
         s += min(len(path.parts), 999) * 0.01
     elif bias_mode == "mtime":
-        try:
-            s += (path.stat().st_mtime % 100000) * 0.001
-        except OSError:
-            pass
+        s += (mtime % 100000) * 0.001
     return s
 
 
@@ -522,13 +525,17 @@ def do_scan(opts):
 
     def file_obj(p, keep, **extra):
         m = meta(p)
+        try:
+            size = p.stat().st_size
+        except OSError:
+            size = 0          # 扫描期间被外部删除/移动，按 0 计，避免中断整次扫描
         d = {"path": str(p), "ext": p.suffix.lower(),
-             "bitrate": m.get("bitrate"), "size": p.stat().st_size,
+             "bitrate": m.get("bitrate"), "size": size,
              "duration": m.get("duration"), "sample_rate": m.get("sample_rate"),
              "channels": m.get("channels"), "bits": m.get("bits"),
              "live": is_live(p.name),
              "name": p.name,
-             "size_h": human(p.stat().st_size), "keep": keep}
+             "size_h": human(size), "keep": keep}
         d.update(extra)
         return d
 

@@ -86,6 +86,16 @@ def test_probe(tmp):
     bogus.write_bytes(b"not audio at all")
     check("损坏文件不抛异常", app.probe_audio(bogus)["bitrate"] is None)
 
+    # 扫描期间文件被外部删除（NAS / 同步盘很常见）：不能中断整次扫描
+    ghost = tmp / "ghost.mp3"
+    ghost.write_bytes(b"x")
+    ghost.unlink()
+    try:
+        s = app.qscore(ghost, {"bitrate": 320}, dict(app.DEFAULT_OPTIONS))
+        check("文件消失时评分不抛异常", s > 0, s)
+    except Exception as e:
+        check("文件消失时评分不抛异常", False, f"{type(e).__name__}: {e}")
+
 
 # ---------------------------------------------------------------- 相似度算法
 def test_similarity():
