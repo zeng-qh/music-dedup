@@ -25,6 +25,17 @@ DEFAULT_OPTIONS = {
     "strip_version": True,    # 清洗时去掉版本标记（live/remix 等）
     "ignore_case": True,      # 忽略大小写
     "loose_match": False,     # 宽松匹配（放宽候选筛选）
+    # ---- 新增规则 ----
+    "match_algo": "sequence",  # 相似度算法
+    "cross_ext": True,         # 跨格式匹配（.flac / .wav 视为同一首）
+    "core_match": True,        # 核心词匹配（差异仅在版本修饰时也归组）
+    "dur_check": True,         # 时长一致性校验
+    "dur_tolerance": 3.0,      # 时长容差（秒）
+    "dur_penalty": "flag",     # 时长差异大时的处理方式
+    "low_bitrate": 0,          # 低码率清理阈值（0 = 关闭）
+    "prefer_lossless": True,   # 无损优先于有损
+    "path_bias": "short",      # 路径偏好（决定多份等价时保留哪份）
+    "norm_name": False,        # 扫描后按规范重命名
 }
 
 LIVE_POLICIES = {
@@ -33,14 +44,41 @@ LIVE_POLICIES = {
     "prefer": "优先现场版：live 版本排在最前。适合偏好现场氛围与即兴演绎",
 }
 
+# 相似度算法：不同算法对「词序不同 / 拼写差异」的容忍度不一样
+MATCH_ALGOS = {
+    "sequence": "字符序列（默认）：逐字符比较，对拼写差异敏感，对词序变化不敏感",
+    "token": "词集合：先按空格/标点切词再比对，"
+             "能识别「晴天 周杰伦」与「周杰伦 - 晴天」。适合中英文混排、命名不统一的曲库",
+    "hybrid": "混合：取两者的较高分，最宽松，也最容易把不同歌归成一组",
+}
+
+# 时长差异较大时的处理策略
+DUR_PENALTIES = {
+    "flag": "仅提示：仍然归为一组，但在界面标注「时长差异」供你人工判断（推荐）",
+    "split": "拆成两组：视为不同版本，各自独立成组，互不判重",
+    "deprioritize": "降权保留：仍归为一组，但时长吻合的那份优先保留",
+}
+
+# 路径偏好：同一首歌有多个等价副本时，优先保留路径符合哪种习惯的文件
+PATH_BIASES = {
+    "short": "路径最短：层级最浅的优先保留，适合以「主库」为主的目录结构",
+    "long": "路径最长：层级最深的优先，适合把整理好的归档放在深层目录",
+    "mtime": "最近修改：修改时间最新的优先（通常是刚整理过的那份）",
+    "none": "不区分：完全按音质决定，不看存放位置",
+}
+
 # 噪声词表按类别组织，便于按开关组合
 NOISE_BITRATE = [
-    r"(?i)\b(320k|256k|192k|128k|64k|flac|mp3|wav|ape|aac|m4a|ogg|wma|hq|sq|cbr|vbr)\b",
-    r"(无损|無損|高音质|高音質|高品质|高品質|母带|母帶)",
+    # 码率标记：320k / 320kbps / 320 kbps
+    r"(?i)(?<![a-z0-9])(320|256|192|128|64)\s*k(bps)?(?![a-z])",
+    # 格式标记：前后不能紧跟字母，避免误伤 hqx 之类的普通词
+    r"(?i)(?<![a-z0-9])(flac|mp3|wav|ape|aac|m4a|ogg|wma|hq|sq|cbr|vbr)(?![a-z])",
+    r"(无损|無損|高音质|高音質|高品质|高品質|母带|母帶|hires|Hi-Res)",
 ]
 NOISE_SOURCE = [
-    r"(?i)\b(网易云音乐|qq音乐|酷狗音乐|酷我音乐|咪咕音乐|虾米音乐|酷狗|酷我|咪咕|虾米)\b",
-    r"(网易云|QQ音乐|酷狗|酷我|咪咕|虾米)",
+    # 中文平台名没有词边界概念，直接用完整平台名匹配（长的排前面，避免短名先吃掉）
+    r"(网易云音乐|网易云|QQ音乐|qq音乐|酷狗音乐|酷我音乐|咪咕音乐|虾米音乐|"
+    r"百度音乐|千千音乐|多米音乐|酷狗|酷我|咪咕|虾米|汽水音乐)",
 ]
 NOISE_VERSION = [
     r"(?i)\b(live|lives|unplugged|remix|cover|demo|acoustic|instrumental|karaoke|"
@@ -100,29 +138,184 @@ def norm(name, opts=None):
 
 
 def read_bitrate(path):
+    """兼容旧接口"""
+    return probe_audio(path).get("bitrate")
+
+
+# MPEG 帧头码率表（Layer III，kbps）
+_MP3_BR = {1: 32, 2: 40, 3: 48, 4: 56, 5: 64, 6: 80, 7: 96,
+           8: 112, 9: 128, 10: 160, 11: 192, 12: 224, 13: 256, 14: 320}
+# 采样率表：version 1 / 2 / 2.5
+_MP3_SR = {3: [44100, 48000, 32000], 2: [22050, 24000, 16000],
+           0: [11025, 12000, 8000]}
+
+
+def probe_audio(path):
+    """读取音频元数据：码率、时长、采样率、声道、位深
+
+    纯标准库实现，不依赖 mutagen/ffprobe，容器内可直接跑。
+    读失败时返回字段为 None 的字典，不影响扫描流程。
+    """
+    info = {"bitrate": None, "duration": None, "sample_rate": None,
+            "channels": None, "bits": None}
     try:
-        with open(path, "rb") as f:
-            head = f.read(8192)
+        size = path.stat().st_size
         ext = path.suffix.lower()
-        if ext == ".flac" and head[:4] == b"fLaC":
+        with open(path, "rb") as f:
+            head = f.read(65536)
+
+        if ext in (".flac", ".alac") or head[:4] == b"fLaC":
+            if head[:4] != b"fLaC":
+                return info
             import struct
-            si = head[8:42]
-            sr = (si[10] << 12) | (si[11] << 4) | (si[12] >> 4)
-            total = ((si[13] & 0x0F) << 32) | struct.unpack(">I", si[14:18])[0]
-            if sr and total:
-                dur = total / sr
-                return int(path.stat().st_size * 8 / dur / 1000) if dur else None
-        if ext == ".mp3":
-            for i in range(len(head) - 4):
-                if head[i] == 0xFF and (head[i + 1] & 0xE0) == 0xE0:
-                    tbl = {1: 32, 2: 40, 3: 48, 4: 56, 5: 64, 6: 80, 7: 96,
-                           8: 112, 9: 128, 10: 160, 11: 192, 12: 224, 13: 256, 14: 320}
-                    if ((head[i + 1] >> 3) & 3) == 3 and ((head[i + 1] >> 1) & 3) == 1:
-                        return tbl.get((head[i + 2] >> 4) & 15)
+            # 遍历元数据块，找到 STREAMINFO（type 0）
+            pos = 4
+            while pos + 4 <= len(head):
+                hdr = head[pos]
+                btype = hdr & 0x7F
+                last = hdr & 0x80
+                blen = int.from_bytes(head[pos + 1:pos + 4], "big")
+                if btype == 0:
+                    si = head[pos + 4:pos + 4 + 34]
+                    if len(si) < 34:
+                        return info
+                    sr = (si[10] << 12) | (si[11] << 4) | (si[12] >> 4)
+                    ch = ((si[12] >> 1) & 0x07) + 1
+                    bps = (((si[12] & 0x01) << 4) | (si[13] >> 4)) + 1
+                    total = ((si[13] & 0x0F) << 32) | \
+                        struct.unpack(">I", si[14:18])[0]
+                    info.update(sample_rate=sr, channels=ch, bits=bps)
+                    if sr and total:
+                        dur = total / sr
+                        info["duration"] = round(dur, 3)
+                        info["bitrate"] = int(size * 8 / dur / 1000)
+                    return info
+                if last:
                     break
+                pos += 4 + blen
+            return info
+
+        if ext == ".mp3" or head[:3] == b"ID3" or head[:2] == b"\xff\xfb" \
+                or head[:2] == b"\xff\xf3" or head[:2] == b"\xff\xfa":
+            # 跳过 ID3v2
+            start = 0
+            if head[:3] == b"ID3" and len(head) > 10:
+                sz = (head[6] << 21) | (head[7] << 14) | (head[8] << 7) | head[9]
+                start = 10 + sz
+            # 找第一个有效的帧头
+            for i in range(start, min(len(head) - 4, start + 200000)):
+                if head[i] != 0xFF or (head[i + 1] & 0xE0) != 0xE0:
+                    continue
+                ver = (head[i + 1] >> 3) & 3      # 3=MPEG1, 2=MPEG2, 0=MPEG2.5
+                layer = (head[i + 1] >> 1) & 3
+                bri = (head[i + 2] >> 4) & 0x0F
+                sri = (head[i + 2] >> 2) & 0x03
+                if ver == 1 or layer != 1 or bri in (0, 15) or sri == 3:
+                    continue
+                br = _MP3_BR.get(bri)
+                sr = _MP3_SR.get(ver, [44100])[sri]
+                info["bitrate"] = br
+                info["sample_rate"] = sr
+                info["channels"] = 1 if ((head[i + 3] >> 6) & 3) == 3 else 2
+                if br and sr:
+                    info["duration"] = round(size * 8 / (br * 1000), 2)
+                return info
+            return info
+
+        if ext == ".wav" and head[:4] == b"RIFF":
+            import struct
+            pos = 12
+            byte_rate = 0
+            ch = bps = sr = 0
+            while pos + 8 <= len(head):
+                cid = head[pos:pos + 4]
+                clen = struct.unpack("<I", head[pos + 4:pos + 8])[0]
+                if cid == b"fmt ":
+                    fmt = head[pos + 8:pos + 8 + 16]
+                    if len(fmt) >= 16:
+                        ch, sr = struct.unpack("<H", fmt[2:4])[0], \
+                            struct.unpack("<I", fmt[4:8])[0]
+                        byte_rate = struct.unpack("<I", fmt[8:12])[0]
+                        bps = struct.unpack("<H", fmt[14:16])[0]
+                elif cid == b"data":
+                    info.update(sample_rate=sr, channels=ch or None, bits=bps or None)
+                    if byte_rate:
+                        dur = clen / byte_rate
+                        info["duration"] = round(dur, 3)
+                        info["bitrate"] = int(byte_rate * 8 / 1000)
+                    return info
+                pos += 8 + clen + (clen & 1)
+            return info
     except Exception:
         pass
-    return None
+    return info
+
+
+def _tokens(s):
+    """把归一化串切成词元：按空格和常见分隔符拆分"""
+    return [t for t in re.split(r"[\s\-_,、/&+]+", s) if t]
+
+
+def core_name(s):
+    """取出名字里的「核心词」集合：去掉版本修饰后剩下的部分
+
+    用于解决「晴天」与「晴天 加长版」这类漏判：
+    相似度 0.75 达不到阈值，但核心词完全一致，实际是同一首歌的不同版本。
+    """
+    toks = _tokens(s)
+    # 单字修饰词与常见版本后缀视为修饰成分
+    mods = {"版", "加长", "完整", "典藏", "珍藏", "特别", "纪念", "新版", "旧版",
+            "原版", "正式", "官方", "高清", "修复", "重制", "重置", "伴奏", "纯音乐",
+            "试听", "片段", "剪辑", "串烧", "dj", "dj版", "慢摇", "钢琴", "吉他"}
+    core = [t for t in toks if t not in mods and not t.endswith("版")]
+    return set(core) if core else set(toks)
+
+
+def core_match(a, b, min_core=1):
+    """核心去修饰后完全相同 -> 判定为同一首歌
+
+    min_core=1 是必要的：中文曲库常见「晴天」「江南」这类单词歌名，
+    若要求至少 2 个核心词，版本修饰识别对它们完全失效。
+    只有 1 个核心词时仍要求它足够长（>=2 字符），避免「版」「b」这类噪声词误合并。
+    """
+    ca, cb = core_name(a), core_name(b)
+    if cb != ca:
+        return False
+    if len(ca) >= 2:
+        return True
+    # 单核心词：要求该词本身有辨识度
+    return bool(ca) and len(next(iter(ca))) >= 2
+
+
+def similarity(a, b, algo="sequence"):
+    """按算法计算两个归一化名字的相似度（0~1）
+
+    出现分叉：sequence 只看字符顺序，token 只看词是否重合。
+    中英文混排、歌手名与歌名顺序颠倒时，token 更准。
+    """
+    if a == b:
+        return 1.0
+    if algo == "token":
+        ta, tb = set(_tokens(a)), set(_tokens(b))
+        if not ta or not tb:
+            return 0.0
+        inter = len(ta & tb)
+        # 用 Dice 系数：对长度差异不敏感，适合词数不同的情况
+        return 2 * inter / (len(ta) + len(tb))
+    seq = SequenceMatcher(None, a, b).ratio()
+    if algo == "hybrid":
+        ta, tb = set(_tokens(a)), set(_tokens(b))
+        tok = (2 * len(ta & tb) / (len(ta) + len(tb))) if ta and tb else 0.0
+        return max(seq, tok)
+    return seq
+
+
+def duration_gap(files):
+    """一个组内最长与最短时长的差值（秒），任一文件缺时长则返回 None"""
+    ds = [f.get("duration") for f in files if f.get("duration")]
+    if len(ds) < 2:
+        return None
+    return max(ds) - min(ds)
 
 
 def is_live(name):
@@ -138,30 +331,99 @@ def is_live(name):
     return bool(live_pat.search(s))
 
 
-def qscore(path, br, live_policy="avoid"):
-    """综合评分：按现场版策略决定录音类型的权重
+def qscore(path, info, opts):
+    """综合评分，决定组内保留谁
 
-    live_policy 策略：
-      avoid  —— 避开现场版（默认）：录音室版永远优先，即使 live 音质更高
-      quality —— 只看音质：不区分录音类型，纯按无损/码率排
-      prefer —— 优先现场版：live 排在最前（适合偏好现场氛围的用户）
-
-    同层内统一按「无损格式 > 码率 > 文件大小」排序。
+    优先级从高到低：
+      1. 录音类型（由 live_policy 决定方向）
+      2. 无损优先（prefer_lossless 可关闭）
+      3. 码率
+      4. 文件大小（微调）
+      5. 路径偏好（path_bias，仅在音质完全相同时起作用）
     """
+    br = info.get("bitrate") if isinstance(info, dict) else info
+    live_policy = opts.get("live_policy", "avoid")
     is_lv = is_live(path.name)
+
     if live_policy == "quality":
-        tier = 0                                   # 不看录音类型
+        tier = 0
     elif live_policy == "prefer":
-        tier = 30000000 if is_lv else 20000000     # 现场版优先
+        tier = 3 if is_lv else 2
     else:  # avoid
-        tier = 10000000 if is_lv else 30000000     # 现场版垫底
-    s = tier
-    if path.suffix.lower() in LOSSLESS:
-        s += 100000
-    s += (br or 0)
-    s += path.stat().st_size / (100 * 1024 * 1024)
+        tier = 1 if is_lv else 3
+    s = tier * 10 ** 9
+
+    # 无损优先：位阶高于码率，避免「1411kbps WAV」压过「1000kbps 真正的 FLAC」
+    lossless = path.suffix.lower() in LOSSLESS
+    if lossless:
+        s += 10 ** 8 if opts.get("prefer_lossless", True) else 0
+
+    # 码率：整数位，最高 1536kbps 也不会溢出到无损位阶
+    s += float(br or 0) * 10 ** 5
+
+    # 文件大小：0~900 区间，只做同码率下的微调
+    s += min(path.stat().st_size / (1024 * 1024), 900) * 10 ** 2
+
+    # 路径偏好：纯小数位，只在以上全部相同时才决定胜负
+    bias_mode = opts.get("path_bias", "short")
+    if bias_mode == "short":
+        s += (1000 - min(len(path.parts), 999)) * 0.01
+    elif bias_mode == "long":
+        s += min(len(path.parts), 999) * 0.01
+    elif bias_mode == "mtime":
+        try:
+            s += (path.stat().st_mtime % 100000) * 0.001
+        except OSError:
+            pass
     return s
 
+
+
+
+def clean_title(name, opts):
+    """从文件名生成规范名：去掉码率/平台/版本噪声，整理分隔符，保留「歌手 - 标题」结构"""
+    stem = os.path.splitext(name)[0]
+    s = stem
+    # 逐类去除噪声（复用归一化词表，但不去大小写、不合并空白）
+    if opts.get("strip_bitrate", True):
+        for p in NOISE_BITRATE:
+            s = re.sub(p, " ", s)
+    if opts.get("strip_source", True):
+        for p in NOISE_SOURCE:
+            s = re.sub(p, " ", s)
+    # 版本标记只在用户开启时去除；保留其中文可读性（如「现场版」）
+    if opts.get("strip_version", True):
+        for p in NOISE_VERSION:
+            s = re.sub(p, " ", s)
+    # 清理空括号与残留分隔符
+    s = re.sub(r"[\(\（\[【]\s*[\)\）\]】]", " ", s)
+    s = re.sub(r"[_\.]+", " ", s)
+    s = re.sub(r"\s*-\s*", " - ", s)      # 统一成「歌手 - 标题」
+    s = re.sub(r"\s{2,}", " ", s).strip(" -")
+    return s or stem
+
+
+def preview_rename(groups, opts):
+    """扫描后生成重命名建议：只处理保留下来的文件，跳过已经合规的"""
+    if not opts.get("norm_name"):
+        return []
+    plans = []
+    for g in groups:
+        for f in g.get("files", []):
+            if not f.get("keep"):
+                continue
+            p = Path(f["path"])
+            new_stem = clean_title(p.name, opts)
+            new_name = new_stem + p.suffix.lower()
+            if new_name == p.name:
+                continue
+            target = p.with_name(new_name)
+            plans.append({
+                "from": str(p), "old_name": p.name, "new_name": new_name,
+                "conflict": target.exists() and target != p,
+                "group": g.get("name", ""),
+            })
+    return plans
 
 def md5_of(path):
     h = hashlib.md5()
@@ -181,12 +443,20 @@ def human(n):
 
 def do_scan(opts):
     threshold = float(opts.get("threshold", 0.85))
+    algo = opts.get("match_algo", "sequence")
     files = [p for p in MUSIC_ROOT.rglob("*")
              if p.is_file() and p.suffix.lower() in AUDIO_EXTS]
     state["progress"] = f"扫描到 {len(files)} 个音频文件，正在分组…"
 
+    # 归一化名字：跨格式匹配关闭时，把扩展名重新拼回名字，避免 flac/wav 被归一成同名
+    def key_of(p):
+        k = norm(p.name, opts)
+        if not opts.get("cross_ext", True):
+            k = f"{k} {p.suffix.lower().lstrip('.')}"
+        return k
+
     # ---------- 相似名聚类：先粗筛再精算，避免 O(n²) 全量比对 ----------
-    nmap = {p: norm(p.name, opts) for p in files}
+    nmap = {p: key_of(p) for p in files}
     parent = {p: p for p in files}
 
     def find(x):
@@ -208,9 +478,11 @@ def do_scan(opts):
         for p in same[1:]:
             union(same[0], p)
 
-    # 只对「长度相近 + 首字符相同或共享前缀」的候选对做精细比对
+    # 只对「长度相近 + 首字符相同」的候选对做精细比对
     keys = [k for k in by_norm if k]
     n = len(keys)
+    # token / hybrid 算法下首字符预筛会漏掉词序打乱的情况，自动放宽
+    loose = bool(opts.get("loose_match")) or algo in ("token", "hybrid")
     for i, k1 in enumerate(keys):
         if CANCEL.is_set():
             raise ScanCancelled()
@@ -219,13 +491,19 @@ def do_scan(opts):
         l1 = len(k1)
         for j in range(i + 1, n):
             k2 = keys[j]
-            # 长度差异过大直接跳过（相似度不可能达标）
-            if abs(l1 - len(k2)) > l1 * (1 - threshold) + 2:
+            # 核心词一致（差异仅在「加长版/重制版」等修饰）时直接合并，
+            # 这一步必须先于长度预筛：版本修饰会让名字明显变长
+            if opts.get("core_match", True) and core_match(k1, k2):
+                for a in by_norm[k1]:
+                    for b in by_norm[k2]:
+                        union(a, b)
                 continue
-            # 首字符不同大概率不相似，快速跳过（宽松模式关闭此预筛）
-            if not opts.get("loose_match") and k1[0] != k2[0]:
+            # 长度差异过大直接跳过（点集算法不依赖长度差，单独判断）
+            if algo == "sequence" and abs(l1 - len(k2)) > l1 * (1 - threshold) + 2:
                 continue
-            if SequenceMatcher(None, k1, k2).ratio() >= threshold:
+            if not loose and k1[0] != k2[0]:
+                continue
+            if similarity(k1, k2, algo) >= threshold:
                 for a in by_norm[k1]:
                     for b in by_norm[k2]:
                         union(a, b)
@@ -233,6 +511,30 @@ def do_scan(opts):
     groups = defaultdict(list)
     for p in files:
         groups[find(p)].append(p)
+
+    # ---------- 探测元数据（每组共用，避免重复 IO）----------
+    meta_cache = {}
+
+    def meta(p):
+        if p not in meta_cache:
+            meta_cache[p] = probe_audio(p)
+        return meta_cache[p]
+
+    def file_obj(p, keep, **extra):
+        m = meta(p)
+        d = {"path": str(p), "ext": p.suffix.lower(),
+             "bitrate": m.get("bitrate"), "size": p.stat().st_size,
+             "duration": m.get("duration"), "sample_rate": m.get("sample_rate"),
+             "channels": m.get("channels"), "bits": m.get("bits"),
+             "live": is_live(p.name),
+             "name": p.name,
+             "size_h": human(p.stat().st_size), "keep": keep}
+        d.update(extra)
+        return d
+
+    dur_check = opts.get("dur_check", True)
+    tol = float(opts.get("dur_tolerance", 3.0))
+    penalty = opts.get("dur_penalty", "flag")
 
     sim = []
     total = len(groups)
@@ -243,15 +545,75 @@ def do_scan(opts):
             raise ScanCancelled()
         if idx % 50 == 0:
             state["progress"] = f"整理相似分组 {idx}/{total}"
-        info = sorted(((p, read_bitrate(p)) for p in g),
-                      key=lambda x: -qscore(x[0], x[1], opts.get("live_policy", "avoid")))
+
+        # 时长差异过大 -> 按时长再切一刀（split 策略下互不判重）
+        gap = duration_gap([meta(p) for p in g]) if dur_check else None
+        big_gap = gap is not None and gap > tol
+
+        if big_gap and penalty == "split":
+            # 按时长聚类：差值在容差内的归为一簇
+            buckets = []
+            for p in sorted(g, key=lambda x: meta(x).get("duration") or 0):
+                d = meta(p).get("duration")
+                placed = False
+                if d is not None:
+                    for b in buckets:
+                        bd = [meta(q).get("duration") for q in b
+                              if meta(q).get("duration")]
+                        if bd and abs(d - sum(bd) / len(bd)) <= tol:
+                            b.append(p)
+                            placed = True
+                            break
+                if not placed:
+                    buckets.append([p])
+            # 单文件簇保留为独立条目，避免文件从视图中「消失」
+            sub_groups = buckets
+        else:
+            sub_groups = [g]
+
+        for sg in sub_groups:
+            ordered = sorted(sg, key=lambda x: -qscore(x, meta(x), opts))
+            gap2 = duration_gap([meta(p) for p in sg]) if dur_check else None
+            big2 = gap2 is not None and gap2 > tol
+            # 单文件簇是「被时长校验拆出来的独立版本」，标记出来避免误删
+            standalone = len(sg) == 1
+            # 组名取组内最短的归一化名：反映「这首歌本身」而非某个变体，
+            # 也避免 prefer 模式下组名带出「加长版」这类修饰
+            gname = min((nmap[p] for p in sg), key=len) or ordered[0].stem
+            sim.append({
+                "name": gname,
+                "kind": "sim",
+                "dur_gap": round(gap2, 2) if gap2 is not None else None,
+                "dur_warn": bool(big2),
+                "standalone": standalone,
+                "files": [file_obj(p, True if standalone else i == 0)
+                          for i, p in enumerate(ordered)],
+            })
+
+    # ---------- 低码率清理：只列「孤立」的低质文件 ----------
+    # 已进入判重组的低码率文件不重复列出：那组里通常有更好的副本，
+    # 用户在该组内勾选即可，重复出现只会让计数虚高、操作混乱。
+    low = []
+    low_th = float(opts.get("low_bitrate") or 0)
+    if low_th > 0:
+        state["progress"] = "筛查低码率文件…"
+        in_dup = {p for g in groups.values() if len(g) > 1 for p in g}
+        for p in files:
+            if CANCEL.is_set():
+                raise ScanCancelled()
+            if p.suffix.lower() in LOSSLESS:
+                continue          # 无损格式没有「低码率」概念
+            if p in in_dup:
+                continue          # 交给判重组处理，避免重复计数
+            br = meta(p).get("bitrate")
+            if br is None or br >= low_th:
+                continue
+            low.append(file_obj(p, False, reason=f"码率 {br}kbps 低于 {int(low_th)}kbps"))
+    if low:
         sim.append({
-            "name": nmap[info[0][0]] or info[0][0].stem,
-            "files": [{"path": str(p), "ext": p.suffix.lower(),
-                       "bitrate": br, "size": p.stat().st_size,
-                       "live": is_live(p.name),
-                       "size_h": human(p.stat().st_size),
-                       "keep": i == 0} for i, (p, br) in enumerate(info)]
+            "name": f"低码率文件（< {int(low_th)}kbps）",
+            "kind": "low", "dur_gap": None, "dur_warn": False,
+            "files": low,
         })
 
     # ---------- 哈希去重（按大小预分组，只对同大小文件算 MD5）----------
@@ -285,15 +647,28 @@ def do_scan(opts):
                     pass
             for h, g in by_hash.items():
                 if len(g) > 1:
-                    gs = sorted(g, key=lambda p: len(str(p)))
+                    gs = sorted(g, key=lambda p: -qscore(p, meta(p), opts))
                     hash_dups.append({
-                        "md5": h[:12],
-                        "files": [{"path": str(p), "size": size, "size_h": human(size),
-                                   "keep": i == 0} for i, p in enumerate(gs)]
+                        "md5": h[:12], "kind": "hash",
+                        "name": gs[0].stem, "dur_gap": None, "dur_warn": False,
+                        "files": [file_obj(p, i == 0, md5=h[:12])
+                                  for i, p in enumerate(gs)]
                     })
+    plans = []
+    if opts.get("norm_name"):
+        state["progress"] = "生成重命名建议…"
+        # 覆盖全部音频文件：不只判重组，孤立文件同样值得规范命名
+        keep_paths = {p for p in files if p.suffix.lower() in AUDIO_EXTS}
+        for g in sim + hash_dups:
+            for f in g.get("files", []):
+                if not f.get("keep"):
+                    keep_paths.discard(Path(f["path"]))
+        fake_groups = [{"name": "", "files": [{"path": str(p), "keep": True}
+                                              for p in sorted(keep_paths)]}]
+        plans = preview_rename(fake_groups, opts)
     return {"sim": sim, "hash": hash_dups, "total_files": len(files),
             "root": str(MUSIC_ROOT), "finished_at": time.time(),
-            "options": opts}
+            "rename_plans": plans, "options": opts}
 
 
 # ---------- 扫描结果存档：下次免扫描 ----------
@@ -381,6 +756,13 @@ def api_scan():
     if not isinstance(src, dict):
         src = raw
     opts = dict(DEFAULT_OPTIONS)
+    # 各下拉项允许的取值
+    ENUMS = {
+        "live_policy": LIVE_POLICIES,
+        "match_algo": MATCH_ALGOS,
+        "dur_penalty": DUR_PENALTIES,
+        "path_bias": PATH_BIASES,
+    }
     for k, default in DEFAULT_OPTIONS.items():
         if k not in src:
             continue
@@ -389,11 +771,22 @@ def api_scan():
             opts[k] = bool(v)
         elif isinstance(default, float):
             try:
-                opts[k] = min(1.0, max(0.3, float(v)))
+                fv = float(v)
+            except (TypeError, ValueError):
+                continue
+            if k == "threshold":
+                opts[k] = min(0.98, max(0.30, fv))
+            elif k == "dur_tolerance":
+                opts[k] = min(120.0, max(0.5, fv))
+            else:
+                opts[k] = fv
+        elif isinstance(default, int):
+            try:
+                opts[k] = min(400, max(0, int(v)))
             except (TypeError, ValueError):
                 pass
         else:
-            if k == "live_policy" and v in LIVE_POLICIES:
+            if k in ENUMS and v in ENUMS[k]:
                 opts[k] = v
     threshold = opts["threshold"]
 
@@ -434,6 +827,9 @@ def api_options():
     return jsonify({
         "defaults": DEFAULT_OPTIONS,
         "live_policies": LIVE_POLICIES,
+        "match_algos": MATCH_ALGOS,
+        "dur_penalties": DUR_PENALTIES,
+        "path_biases": PATH_BIASES,
         "schema": [
             {
                 "key": "threshold", "type": "range", "label": "相似度阈值",
@@ -477,6 +873,57 @@ def api_options():
                 "key": "loose_match", "type": "switch", "label": "宽松匹配",
                 "desc": "取消「首字符必须相同」的快速预筛，允许标题开头不同的文件参与比对。"
                         "更全面但扫描更慢，大曲库慎用。",
+            },
+            {
+                "key": "match_algo", "type": "select", "label": "相似度算法", "group": "匹配",
+                "desc": "决定「两个文件名有多像」怎么算。换算法能解决不同命名习惯造成的漏判。",
+            },
+            {
+                "key": "cross_ext", "type": "switch", "label": "跨格式匹配", "group": "匹配",
+                "desc": "让「晴天.flac」与「晴天.wav」参与同一组比对。关闭后同名的无损与有损版本"
+                        "会各自成组、互不判重——除非你确实想把不同格式分开存放。",
+            },
+            {
+                "key": "core_match", "type": "switch", "label": "识别版本修饰", "group": "匹配",
+                "desc": "把「晴天」「晴天 加长版」「晴天 重制版」视为同一首歌。"
+                        "这类名字单纯靠相似度算不够（约 0.75，达不到阈值），"
+                        "但去掉版本修饰后核心词完全一致。关闭后将严格按字面相似度判断。",
+            },
+            {
+                "key": "dur_check", "type": "switch", "label": "时长一致性校验", "group": "匹配",
+                "desc": "读取音频真实时长，比较组内文件是否长度相近。"
+                        "同名但时长差很多的往往是不同录音（如 3 分钟单曲 vs 7 分钟现场加长版），"
+                        "靠文件名分不出来，只能靠时长。",
+            },
+            {
+                "key": "dur_tolerance", "type": "range-fine", "label": "时长容差（秒）", "group": "匹配",
+                "min": 1, "max": 60, "step": 1,
+                "desc": "组内最长与最短时长相差多少秒以内算「同一版本」。"
+                        "同一首歌的不同压制通常差 1~2 秒（片头静音），现场版则常差几十秒。",
+            },
+            {
+                "key": "dur_penalty", "type": "select", "label": "时长差异处理", "group": "匹配",
+                "desc": "检测到组内时长差异超过容差时，希望工具怎么处理这组。",
+            },
+            {
+                "key": "prefer_lossless", "type": "switch", "label": "无损优先", "group": "保留",
+                "desc": "同等条件下优先保留 FLAC/WAV/APE 等无损格式，而不是码率更高的有损文件。"
+                        "关闭后纯按码率排（此时 1411kbps 的 WAV 同样会赢）。",
+            },
+            {
+                "key": "path_bias", "type": "select", "label": "等价时保留哪份", "group": "保留",
+                "desc": "当多个文件的音质完全相同时，用存放位置决定保留谁。",
+            },
+            {
+                "key": "low_bitrate", "type": "range-fine", "label": "低码率清理阈值", "group": "清理",
+                "min": 0, "max": 320, "step": 16,
+                "desc": "把码率低于此值的有损文件单独列成一组，方便你清理老旧的劣质资源。"
+                        "设为 0 关闭。只统计没有重复的文件——有重复的交给判重组处理。",
+            },
+            {
+                "key": "norm_name", "type": "switch", "label": "按规范重命名", "group": "清理",
+                "desc": "扫描后对保留下来的文件统一改名为「歌手 - 标题」格式，去掉码率、平台后缀等噪声。"
+                        "改名前的原名会记录在结果里，可随时核对。",
             },
         ],
     })
@@ -572,6 +1019,69 @@ def api_rename():
         except Exception:
             pass
     return jsonify({"ok": True, "path": new})
+
+
+@app.route("/api/rename_batch", methods=["POST"])
+def api_rename_batch():
+    """批量执行重命名建议：只处理传入的路径，逐条校验后改名
+
+    任何一条失败都不影响其他条目，返回逐条结果。
+    改名后同步刷新内存报告与存档，避免用户需要重新扫描。
+    """
+    items = (request.json or {}).get("items", [])
+    if not isinstance(items, list):
+        return jsonify({"error": "items 必须是列表"}), 400
+    done, failed = [], []
+    res = state.get("result")
+    for it in items:
+        old = (it or {}).get("from") or (it or {}).get("path")
+        new_name = (it or {}).get("new_name") or ""
+        if not old or not new_name:
+            failed.append({"from": old, "err": "参数不完整"})
+            continue
+        p = Path(old)
+        try:
+            p.resolve().relative_to(MUSIC_ROOT.resolve())
+        except (ValueError, OSError):
+            failed.append({"from": old, "err": "路径越界"})
+            continue
+        if not p.is_file():
+            failed.append({"from": old, "err": "文件不存在"})
+            continue
+        name = new_name.strip()
+        if "/" in name or "\\" in name or name in (".", ".."):
+            failed.append({"from": old, "err": "文件名非法"})
+            continue
+        if Path(name).suffix.lower() not in AUDIO_EXTS:
+            name += p.suffix
+        target = p.with_name(name)
+        if target == p:
+            continue
+        if target.exists():
+            failed.append({"from": old, "err": f"目标已存在: {name}"})
+            continue
+        try:
+            p.rename(target)
+            done.append({"from": old, "to": str(target), "name": name})
+        except OSError as e:
+            failed.append({"from": old, "err": str(e)})
+            continue
+        # 同步内存报告
+        if res:
+            for grp in res.get("sim", []) + res.get("hash", []):
+                for f in grp.get("files", []):
+                    if f.get("path") == str(p):
+                        f["path"] = str(target)
+                        f["name"] = name
+            res["rename_plans"] = [x for x in res.get("rename_plans", [])
+                                   if x.get("from") != old]
+    if res and done:
+        try:
+            archive_save(res, res.get("threshold", 0.85))
+        except Exception:
+            pass
+    return jsonify({"done": done, "failed": failed,
+                    "count": len(done), "failed_count": len(failed)})
 
 
 if __name__ == "__main__":

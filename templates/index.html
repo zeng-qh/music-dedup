@@ -233,6 +233,24 @@ a{color:inherit}
 }
 .cfg-reset:hover{color:var(--a-500)}
 /* 配置区块容器 */
+.cfg-sec{margin-top:14px}
+.cfg-sec:first-child{margin-top:0}
+.cfg-sec-h{
+  font-size:10px;font-weight:600;letter-spacing:.08em;color:var(--text-faint);
+  text-transform:uppercase;padding:0 0 4px 12px;
+}
+.cfg-val{font-size:11px;color:var(--text-dim);font-variant-numeric:tabular-nums;flex:none}
+.cfg-range{
+  width:100%;margin-top:8px;height:4px;-webkit-appearance:none;appearance:none;
+  border-radius:2px;background:var(--n-200);outline:none;
+}
+.cfg-range::-webkit-slider-thumb{
+  -webkit-appearance:none;width:13px;height:13px;border-radius:50%;
+  background:var(--a-500);cursor:pointer;box-shadow:0 0 0 2px var(--surface);
+}
+.cfg-range::-moz-range-thumb{
+  width:13px;height:13px;border:none;border-radius:50%;background:var(--a-500);cursor:pointer;
+}
 .field{padding:0 18px 14px}
 .field label{display:block;font-size:var(--t-xs);font-weight:500;color:var(--text-mid);margin-bottom:7px}
 .field .hint{font-size:var(--t-xs);color:var(--text-faint);line-height:1.4;margin-top:6px}
@@ -386,8 +404,11 @@ input[type=range]::-moz-range-thumb{
 .group[data-open="true"] .chev{transform:rotate(90deg)}
 .group-title{
   font-size:var(--t-sm);font-weight:500;min-width:0;overflow:hidden;
-  text-overflow:ellipsis;white-space:nowrap;flex:1;
+  text-overflow:ellipsis;white-space:nowrap;flex:0 1 auto;
 }
+/* 告警紧贴标题，group-meta 负责撑开剩余空间 */
+.group-head .group-meta{margin-left:auto}
+.dur-warn{display:inline-flex;align-items:center;gap:3px}
 .group-meta{
   display:flex;align-items:center;gap:6px;flex:none;
   font-size:var(--t-xs);color:var(--text-dim);font-variant-numeric:tabular-nums;
@@ -402,6 +423,39 @@ input[type=range]::-moz-range-thumb{
 :root[data-theme="dark"] .pill-neutral{background:var(--n-800)}
 .pill-ok{background:var(--ok-100);color:var(--ok-600)}
 .pill-bad{background:var(--bad-100);color:var(--bad-600)}
+.pill-warn{background:#fef3c7;color:#a16207;flex:none}
+:root[data-theme="dark"] .pill-warn{background:#422006;color:#fbbf24}
+.ga-hint{font-size:11px;color:var(--text-faint);margin-left:auto}
+/* 命名规范提示条 */
+.rename-bar{
+  display:flex;align-items:center;gap:12px;
+  padding:11px 16px;margin-bottom:12px;
+  border:1px solid var(--border);border-radius:var(--r-md);
+  background:var(--a-50, #f0f9ff);
+}
+:root[data-theme="dark"] .rename-bar{background:oklch(26% 0.03 250)}
+.rename-bar .rb-text{flex:1;min-width:0;font-size:var(--t-xs);color:var(--text-mid)}
+.rename-bar .rb-text strong{color:var(--text);font-weight:600;margin-right:6px}
+.rename-bar .btn{flex:none}
+/* 批量重命名弹窗 */
+.modal-wide{max-width:640px;width:calc(100vw - 40px)}
+.rb-list{
+  max-height:min(52vh,420px);overflow-y:auto;margin:12px 0;
+  border:1px solid var(--border);border-radius:var(--r-sm);
+}
+.rb-item{
+  display:flex;align-items:flex-start;gap:9px;padding:9px 12px;
+  border-bottom:1px solid var(--n-100);cursor:pointer;
+}
+:root[data-theme="dark"] .rb-item{border-bottom-color:var(--n-800)}
+.rb-item:last-child{border-bottom:none}
+.rb-item:hover{background:var(--n-50)}
+:root[data-theme="dark"] .rb-item:hover{background:var(--n-900)}
+.rb-item input{margin-top:2px;flex:none}
+.rb-body{display:flex;flex-wrap:wrap;align-items:center;gap:6px;min-width:0;font-size:var(--t-xs)}
+.rb-old{color:var(--text-faint);text-decoration:line-through;word-break:break-all}
+.rb-arrow{color:var(--text-faint);flex:none}
+.rb-new{color:var(--text);font-weight:500;word-break:break-all}
 .pill-accent{background:var(--a-100);color:var(--a-600)}
 
 /* 文件行 */
@@ -748,6 +802,19 @@ dialog::backdrop{background:oklch(20% 0.01 258 / 0.45);backdrop-filter:blur(2px)
   </form>
 </dialog>
 
+<!-- ============ 批量规范化重命名弹窗 ============ -->
+<dialog id="renameBatchDlg">
+  <div class="modal modal-wide">
+    <h2>按规范重命名</h2>
+    <p class="sub" id="rbSub"></p>
+    <div class="rb-list" id="rbList"></div>
+    <div class="modal-actions">
+      <button class="btn btn-ghost" type="button" onclick="renameBatchDlg.close()">取消</button>
+      <button class="btn btn-primary" type="button" onclick="applyRenames()" style="width:auto">应用全部</button>
+    </div>
+  </div>
+</dialog>
+
 <script>
 /* ================= 状态 ================= */
 let result = null;
@@ -811,6 +878,7 @@ $('th').addEventListener('input', e => {
 let CFG_SCHEMA = [];      // 服务端返回的规则定义
 let CFG_DEFAULTS = {};    // 默认值
 let CFG_LIVE = {};        // 现场版策略选项
+let CFG_ENUMS = {};       // 各类下拉选项表 key -> {值: 说明}
 let cfg = {};             // 当前配置值
 
 function closeCfgHint(){}
@@ -845,36 +913,83 @@ function renderCfg(){
   $('th').value = cfg.threshold;
   $('thVal').textContent = Number(cfg.threshold).toFixed(2);
 
-  panel.innerHTML = CFG_SCHEMA.filter(x => x.key !== 'threshold').map(item => {
-    if(item.type === 'switch'){
-      const on = !!cfg[item.key];
-      return `<div class="cfg-item">
-        <div class="cfg-row">
-          <span class="cfg-name">${esc(item.label)}</span>
-          <label class="switch">
-            <input type="checkbox" ${on?'checked':''} onchange="setCfg('${item.key}', this.checked)"
-                   aria-label="${esc(item.label)}">
-            <span class="track"></span><span class="knob"></span>
-          </label>
-        </div>
-        <div class="cfg-desc">${esc(item.desc)}</div>
-      </div>`;
-    }
-    if(item.type === 'select'){
-      const opts = Object.entries(CFG_LIVE).map(([k, d]) =>
-        `<option value="${k}" ${cfg[item.key]===k?'selected':''}>${esc(d.split('：')[0])}</option>`).join('');
-      const desc = CFG_LIVE[cfg[item.key]] || '';
-      return `<div class="cfg-item">
-        <div class="cfg-row"><span class="cfg-name">${esc(item.label)}</span></div>
-        <select class="cfg-select" onchange="setCfg('${item.key}', this.value); renderCfgDesc();" id="sel_${item.key}">${opts}</select>
-        <div class="cfg-desc">${esc(desc)}</div>
-      </div>`;
-    }
-    return '';
-  }).join('') + `<button class="cfg-reset" onclick="resetCfg()">
+  // 按 group 字段分节；现场版处理作为「基础」组的第一项
+  const items = CFG_SCHEMA.filter(x => x.key !== 'threshold');
+  const groups = new Map();
+  items.forEach(it => {
+    const g = it.group || '基础';
+    if(!groups.has(g)) groups.set(g, []);
+    groups.get(g).push(it);
+  });
+  // 现场版处理固定排在最前
+  const basic = groups.get('基础') || [];
+  groups.set('基础', basic.sort((a, b) =>
+    (a.key === 'live_policy' ? -1 : b.key === 'live_policy' ? 1 : 0)));
+
+  const body = [...groups.entries()].map(([gname, list]) => {
+    const rows = list.map(item => cfgItemHTML(item)).join('');
+    return `<div class="cfg-sec"><div class="cfg-sec-h">${esc(gname)}</div>${rows}</div>`;
+  }).join('');
+
+  panel.innerHTML = body + `<button class="cfg-reset" onclick="resetCfg()">
       <svg width="11" height="11" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><path d="M14 8a6 6 0 1 1-1.8-4.3M14 2v4h-4"/></svg>
       恢复默认设置</button>`;
   renderCfgBadge();
+}
+
+function cfgItemHTML(item){
+  const val = cfg[item.key];
+  if(item.type === 'switch'){
+    return `<div class="cfg-item">
+      <div class="cfg-row">
+        <span class="cfg-name">${esc(item.label)}</span>
+        <label class="switch">
+          <input type="checkbox" ${val?'checked':''} onchange="setCfg('${item.key}', this.checked)"
+                 aria-label="${esc(item.label)}">
+          <span class="track"></span><span class="knob"></span>
+        </label>
+      </div>
+      <div class="cfg-desc">${esc(item.desc)}</div>
+    </div>`;
+  }
+  if(item.type === 'select'){
+    const opts = CFG_ENUMS[item.key] || {};
+    const list = Object.entries(opts).map(([k,d]) =>
+      `<option value="${k}" ${val===k?'selected':''}>${esc(d.split('：')[0])}</option>`).join('');
+    return `<div class="cfg-item">
+      <div class="cfg-row"><span class="cfg-name">${esc(item.label)}</span></div>
+      <select class="cfg-select" onchange="setCfg('${item.key}', this.value); renderEnumDesc(this)"
+              data-enum="${item.key}">${list}</select>
+      <div class="cfg-desc">${esc((opts[val]||'').split('：').slice(1).join('：') || item.desc)}</div>
+    </div>`;
+  }
+  if(item.type === 'range-fine'){
+    return `<div class="cfg-item">
+      <div class="cfg-row">
+        <span class="cfg-name">${esc(item.label)}</span>
+        <span class="cfg-val tnum" id="val_${item.key}">${fmtCfgVal(item, val)}</span>
+      </div>
+      <input type="range" class="cfg-range" min="${item.min}" max="${item.max}" step="${item.step}"
+             value="${val}" oninput="setCfg('${item.key}', Number(this.value)); $('val_${item.key}').textContent = fmtCfgValById('${item.key}', this.value)"
+             aria-label="${esc(item.label)}">
+      <div class="cfg-desc">${esc(item.desc)}</div>
+    </div>`;
+  }
+  return '';
+}
+
+function fmtCfgVal(item, v){ return fmtCfgValById(item.key, v); }
+function fmtCfgValById(key, v){
+  const n = Number(v);
+  if(key === 'low_bitrate') return n === 0 ? '关闭' : n + 'k';
+  if(key === 'dur_tolerance') return n + 's';
+  return String(v);
+}
+function renderEnumDesc(sel){
+  const key = sel.dataset.enum;
+  const opts = CFG_ENUMS[key] || {};
+  const el = sel.parentElement.querySelector('.cfg-desc');
+  if(el) el.textContent = (opts[sel.value] || '').split('：').slice(1).join('：');
 }
 function renderCfgDesc(){
   const item = CFG_SCHEMA.find(x => x.key === 'live_policy');
@@ -909,6 +1024,12 @@ function resetCfg(){
 // 启动时拉取规则定义并渲染
 fetch('/api/options').then(r => r.json()).then(d => {
   CFG_SCHEMA = d.schema; CFG_DEFAULTS = d.defaults; CFG_LIVE = d.live_policies;
+  CFG_ENUMS = {
+    live_policy: d.live_policies || {},
+    match_algo: d.match_algos || {},
+    dur_penalty: d.dur_penalties || {},
+    path_bias: d.path_biases || {},
+  };
   renderCfg();
 }).catch(() => {});
 
@@ -1003,16 +1124,23 @@ function setFilter(f){
 function currentGroups(){
   if(!result) return [];
   const q = ($('q').value || '').trim().toLowerCase();
+  const simOnly = result.sim.filter(g => g.kind !== 'low');
+  const lowOnly = result.sim.filter(g => g.kind === 'low');
   let groups = [];
-  if(filter !== 'hash'){
-    groups = groups.concat(result.sim.map(g => ({ ...g, kind:'sim' })));
-  }
-  if(filter !== 'sim'){
+  if(filter === 'all'){
+    groups = groups.concat(simOnly.map(g => ({ ...g, kind:'sim' })));
     groups = groups.concat(result.hash.map(g => ({ ...g, kind:'hash' })));
+    groups = groups.concat(lowOnly.map(g => ({ ...g, kind:'low' })));
+  } else if(filter === 'sim'){
+    groups = simOnly.map(g => ({ ...g, kind:'sim' }));
+  } else if(filter === 'hash'){
+    groups = result.hash.map(g => ({ ...g, kind:'hash' }));
+  } else if(filter === 'low'){
+    groups = lowOnly.map(g => ({ ...g, kind:'low' }));
   }
   if(q){
     groups = groups.filter(g =>
-      g.name.toLowerCase().includes(q) ||
+      (g.name||'').toLowerCase().includes(q) ||
       (g.md5 && g.md5.includes(q)) ||
       g.files.some(f => f.path.toLowerCase().includes(q))
     );
@@ -1021,7 +1149,11 @@ function currentGroups(){
 }
 
 function statsFor(g){
-  const keep = g.files.filter(f => !f.keep).length;  // 非保留 = 建议删除
+  // 低码率组没有「推荐保留」，整组都是候选删除，但默认不勾选
+  if(g.kind === 'low'){
+    return { dup: 0, bytes: 0 };
+  }
+  const keep = g.files.filter(f => !f.keep).length;
   const bytes = g.files.filter(f => !f.keep).reduce((s,f) => s + (f.size||0), 0);
   return { dup: keep, bytes };
 }
@@ -1042,26 +1174,52 @@ function render(){
 
   // 默认决策：按「默认勾选建议删除项」配置决定是否预选非推荐版本
   const preselect = (result.options && result.options.preselect) !== false;
+  const tol = Number((result.options && result.options.dur_tolerance) || 3);
   selected.clear();
   if(preselect){
-    [...result.sim.flatMap(g=>g.files), ...result.hash.flatMap(g=>g.files)]
+    // 低码率组没有「推荐保留」，不自动勾选，避免误删
+    [...result.sim.filter(g => g.kind !== 'low').flatMap(g=>g.files),
+     ...result.hash.flatMap(g=>g.files)]
       .forEach(f => { if(!f.keep) selected.add(f.path); });
+    // 时长明显偏离主流的版本（如 185s 的现场加长版混在 30s 单曲组里）
+    // 默认取消勾选：这类文件与组内其他成员很可能不是同一版本，删了就是永久丢失
+    result.sim.filter(g => g.dur_warn).forEach(g => {
+      const durs = g.files.map(f => f.duration).filter(Boolean);
+      if(durs.length < 2) return;
+      const median = durs.slice().sort((a,b)=>a-b)[Math.floor(durs.length/2)];
+      g.files.forEach(f => {
+        if(f.keep || !f.duration) return;
+        if(Math.abs(f.duration - median) > tol) selected.delete(f.path);
+      });
+    });
   }
   // 不预选时 selected 为空，所有行显示为「保留」，由用户在界面上自行标记要删的
+
+  const nLow = result.sim.filter(g => g.kind === 'low').length;
+  const nSimGroup = result.sim.length - nLow;
+  const plans = result.rename_plans || [];
 
   $('main').innerHTML = `
     <div class="metrics">
       <div class="metric"><div class="metric-k">音频文件</div><div class="metric-v tnum">${fmtNum(result.total_files)}</div></div>
-      <div class="metric"><div class="metric-k">相似名分组</div><div class="metric-v tnum">${fmtNum(result.sim.length)}</div></div>
+      <div class="metric"><div class="metric-k">相似名分组</div><div class="metric-v tnum">${fmtNum(nSimGroup)}</div></div>
       <div class="metric"><div class="metric-k">完全重复组</div><div class="metric-v tnum">${fmtNum(result.hash.length)}</div></div>
       <div class="metric bad"><div class="metric-k">建议删除</div><div class="metric-v tnum">${fmtNum(totalDup)}</div></div>
       <div class="metric accent"><div class="metric-k">可释放空间</div><div class="metric-v tnum">${human(release)}</div></div>
     </div>
+    ${plans.length ? `<div class="rename-bar">
+      <div class="rb-text">
+        <strong>命名规范</strong>
+        <span>${plans.length} 个文件可以整理成「歌手 - 标题」格式</span>
+      </div>
+      <button class="btn btn-ghost btn-sm" onclick="showRenames()">查看并应用</button>
+    </div>` : ''}
     <div class="toolbar">
       <div class="segmented" role="group" aria-label="筛选视图">
         <button aria-pressed="${filter==='all'}" onclick="setFilter('all')">全部</button>
         <button aria-pressed="${filter==='sim'}" onclick="setFilter('sim')">相似名</button>
         <button aria-pressed="${filter==='hash'}" onclick="setFilter('hash')">完全重复</button>
+        ${nLow ? `<button aria-pressed="${filter==='low'}" onclick="setFilter('low')">低码率</button>` : ''}
       </div>
       <div class="toolbar-right">
         <button class="btn btn-ghost btn-sm" onclick="expandAll(true)">展开全部</button>
@@ -1095,65 +1253,95 @@ function renderList(){
     if(isKeep){ row.classList.add('is-keep'); }
     else {
       row.classList.toggle('is-del', selected.has(p));
-      const bd = row.querySelector('.dbtn.del');
-      const bk = row.querySelector('.dbtn.keep');
-      bd.setAttribute('aria-pressed', selected.has(p) ? 'true' : 'false');
-      bk.setAttribute('aria-pressed', selected.has(p) ? 'false' : 'true');
+      // 低码率组没有「保留」按钮，逐项判空
+      row.querySelector('.dbtn.del')
+        ?.setAttribute('aria-pressed', selected.has(p) ? 'true' : 'false');
+      row.querySelector('.dbtn.keep')
+        ?.setAttribute('aria-pressed', selected.has(p) ? 'false' : 'true');
     }
   });
 }
 
 function groupHTML(g, gi){
   const { dup, bytes } = statsFor(g);
-  const title = g.kind === 'hash' ? `MD5 ${g.md5}…` : g.name;
+  const title = g.kind === 'hash' ? `MD5 ${g.md5}…`
+              : g.kind === 'low' ? g.name
+              : g.name;
   const badge = g.kind === 'hash'
     ? '<span class="pill pill-neutral">完全重复</span>'
+    : g.kind === 'low'
+    ? '<span class="pill pill-warn">低码率</span>'
     : '<span class="pill pill-neutral">相似名</span>';
+  // 时长告警：同名但长度差很多，很可能不是同一版本
+  const durWarn = g.dur_warn
+    ? `<span class="pill pill-warn dur-warn" title="组内时长相差 ${g.dur_gap} 秒。可能不是同一版本（例如单曲版与现场加长版），删除前请先试听确认">
+         <svg width="11" height="11" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M8 5v3.5M8 11v.5"/><circle cx="8" cy="8" r="6"/></svg>
+         时长差 ${Math.round(g.dur_gap)}s</span>`
+    : '';
+  const alone = g.standalone
+    ? '<span class="pill pill-ok" title="时长与其他版本差异较大，已拆为独立条目，默认保留">独立版本</span>'
+    : '';
   return `<section class="group" data-open="false" data-gi="${gi}">
     <button class="group-head" onclick="toggleGroup(this)" aria-expanded="false">
       <svg class="chev" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M6 3.5L10.5 8 6 12.5"/></svg>
       ${badge}
       <span class="group-title" title="${esc(title)}">${esc(title)}</span>
+      ${durWarn}${alone}
       <span class="group-meta">
         <span class="hide-sm">${g.files.length} 个文件</span>
-        <span class="pill pill-bad">−${dup}</span>
+        ${dup > 0 ? `<span class="pill pill-bad">−${dup}</span>` : ''}
         <span class="hide-sm tnum">${human(bytes)}</span>
       </span>
     </button>
     <div class="group-body">
       ${g.files.map(f => fileRowHTML(f, g.kind, g.files)).join('')}
       <div class="group-actions">
-        <button class="btn btn-ghost btn-sm" onclick="groupAllKeep(this)">全部保留</button>
-        <button class="btn btn-ghost btn-sm" onclick="groupAllDel(this)">仅保留推荐版本</button>
+        ${g.kind === 'low'
+          ? `<span class="ga-hint">低码率文件没有推荐项，请自行决定是否删除</span>
+             <button class="btn btn-ghost btn-sm" onclick="groupSelectAll(this)" style="margin-left:auto">全选本组</button>`
+          : `<button class="btn btn-ghost btn-sm" onclick="groupAllKeep(this)">全部保留</button>
+             <button class="btn btn-ghost btn-sm" onclick="groupAllDel(this)">仅保留推荐版本</button>`}
       </div>
     </div>
   </section>`;
+}
+
+function fmtDur(s){
+  if(s === null || s === undefined) return '';
+  const m = Math.floor(s / 60), sec = Math.round(s % 60);
+  return `${m}:${String(sec).padStart(2,'0')}`;
 }
 
 function fileRowHTML(f, kind, group){
   const isKeep = f.keep;
   // 组内存在现场版时，保留理由显示为「专辑版保留」而非「音质最高」
   const isLiveGroup = !!(group && group.some(x => x.live));
+  // 保留标签要反映「为什么留下它」，而不是组内有没有 live：
+  //   keep 的文件本身是 live      -> 现场版保留
+  //   keep 是专辑版且组内有 live   -> 专辑版保留
+  //   其余                          -> 音质最高
+  const keepLabel = f.live ? '现场版保留'
+                  : (isLiveGroup ? '专辑版保留' : '音质最高');
   const name = f.path.split('/').pop();
   const dir = f.path.slice(0, f.path.length - name.length - 1) || '/';
   return `<div class="filerow" data-path="${esc(f.path)}" data-keep="${isKeep?1:0}" data-size="${f.size||0}">
     <div class="fname">
       <div class="fname-main">
         <span class="nm" title="${esc(name)}">${esc(name)}</span>
-        ${isKeep ? '<span class="pill pill-ok" style="flex:none">' + (isLiveGroup ? '专辑版保留' : '音质最高') + '</span>' : ''}
+        ${isKeep ? `<span class="pill pill-ok" style="flex:none">${keepLabel}</span>` : ''}
         ${(!isKeep && f.live) ? '<span class="pill pill-neutral" style="flex:none" title="现场版有观众噪声与混响，优先保留专辑版">Live</span>' : ''}
       </div>
       <div class="fname-sub" title="${esc(dir)}">${esc(dir)}</div>
     </div>
     <div class="fmeta-wrap" style="display:contents">
       <div class="fmeta">${f.bitrate ? f.bitrate + 'kbps' : (f.ext||'').replace('.','').toUpperCase()}</div>
-      <div class="fmeta">${f.size_h || human(f.size)}</div>
+      <div class="fmeta" title="${f.size_h||''} ${f.sample_rate?f.sample_rate+'Hz':''} ${f.bits?f.bits+'bit':''}">${f.duration ? fmtDur(f.duration) : (f.size_h || human(f.size))}</div>
     </div>
     <div class="decision">
-      <button class="dbtn keep" aria-pressed="${isKeep}" onclick="decide(this,'keep')">
+      ${kind === 'low' ? '' : `<button class="dbtn keep" aria-pressed="${isKeep}" onclick="decide(this,'keep')">
         <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M3 8.5l3.5 3.5L13 5"/></svg><span>保留</span>
-      </button>
-      <button class="dbtn del" aria-pressed="${!isKeep}" onclick="decide(this,'del')">
+      </button>`}
+      <button class="dbtn del" aria-pressed="${kind === 'low' ? (selected.has(f.path)?'true':'false') : !isKeep}" onclick="decide(this,'del')">
         <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 4l8 8M12 4l-8 8"/></svg><span>删除</span>
       </button>
       <button class="mini-btn" title="重命名" aria-label="重命名" onclick="renameFile('${esc(f.path).replace(/'/g,"\\'")}')">
@@ -1184,16 +1372,19 @@ function expandAll(open){
 function decide(btn, kind){
   const row = btn.closest('.filerow');
   const p = row.dataset.path;
+  // 低码率组没有「保留」按钮，通过空值保护避免报错
+  const bk = row.querySelector('.dbtn.keep');
+  const bd = row.querySelector('.dbtn.del');
   if(kind === 'keep'){
     selected.delete(p);
     row.classList.remove('is-del');
-    row.querySelector('.dbtn.keep').setAttribute('aria-pressed','true');
-    row.querySelector('.dbtn.del').setAttribute('aria-pressed','false');
+    if(bk) bk.setAttribute('aria-pressed','true');
+    if(bd) bd.setAttribute('aria-pressed','false');
   } else {
     selected.add(p);
     row.classList.add('is-del');
-    row.querySelector('.dbtn.keep').setAttribute('aria-pressed','false');
-    row.querySelector('.dbtn.del').setAttribute('aria-pressed','true');
+    if(bk) bk.setAttribute('aria-pressed','false');
+    if(bd) bd.setAttribute('aria-pressed','true');
   }
   updateBar();
 }
@@ -1202,8 +1393,8 @@ function groupAllKeep(btn){
   g.querySelectorAll('.filerow').forEach(row => {
     selected.delete(row.dataset.path);
     row.classList.remove('is-del');
-    row.querySelector('.dbtn.keep').setAttribute('aria-pressed','true');
-    row.querySelector('.dbtn.del').setAttribute('aria-pressed','false');
+    row.querySelector('.dbtn.keep')?.setAttribute('aria-pressed','true');
+    row.querySelector('.dbtn.del')?.setAttribute('aria-pressed','false');
   });
   updateBar();
 }
@@ -1216,14 +1407,24 @@ function groupAllDel(btn){
     if(keepFirst){
       selected.delete(row.dataset.path);
       row.classList.remove('is-del');
-      row.querySelector('.dbtn.keep').setAttribute('aria-pressed','true');
-      row.querySelector('.dbtn.del').setAttribute('aria-pressed','false');
+      row.querySelector('.dbtn.keep')?.setAttribute('aria-pressed','true');
+      row.querySelector('.dbtn.del')?.setAttribute('aria-pressed','false');
     } else {
       selected.add(row.dataset.path);
       row.classList.add('is-del');
-      row.querySelector('.dbtn.keep').setAttribute('aria-pressed','false');
-      row.querySelector('.dbtn.del').setAttribute('aria-pressed','true');
+      row.querySelector('.dbtn.keep')?.setAttribute('aria-pressed','false');
+      row.querySelector('.dbtn.del')?.setAttribute('aria-pressed','true');
     }
+  });
+  updateBar();
+}
+function groupSelectAll(btn){
+  // 低码率组专用：整组标记删除（没有「推荐保留」概念）
+  const g = btn.closest('.group');
+  g.querySelectorAll('.filerow').forEach(row => {
+    selected.add(row.dataset.path);
+    row.classList.add('is-del');
+    row.querySelector('.dbtn.del')?.setAttribute('aria-pressed','true');
   });
   updateBar();
 }
@@ -1307,6 +1508,50 @@ function submitRename(e){
     });
   }).catch(() => { renameDlg.close(); toast('请求失败', 'err'); });
   return false;
+}
+
+/* ================= 批量规范化重命名 ================= */
+function showRenames(){
+  const plans = (result && result.rename_plans) || [];
+  if(!plans.length){ toast('没有需要整理的文件名'); return; }
+  $('rbSub').textContent = `${plans.length} 个文件，应用后只改文件名、不移动目录`;
+  $('rbList').innerHTML = plans.map((p, i) => `
+    <label class="rb-item">
+      <input type="checkbox" class="rb-chk" data-i="${i}" checked ${p.conflict ? 'disabled' : ''}>
+      <span class="rb-body">
+        <span class="rb-old">${esc(p.old_name)}</span>
+        <span class="rb-arrow">→</span>
+        <span class="rb-new">${esc(p.new_name)}</span>
+        ${p.conflict ? '<span class="pill pill-bad" style="flex:none">目标已存在</span>' : ''}
+      </span>
+    </label>`).join('');
+  renameBatchDlg.showModal();
+}
+
+function applyRenames(){
+  const plans = result.rename_plans || [];
+  const items = [];
+  document.querySelectorAll('.rb-chk').forEach(chk => {
+    if(!chk.checked || chk.disabled) return;
+    const p = plans[Number(chk.dataset.i)];
+    if(p) items.push({ from: p.from, new_name: p.new_name });
+  });
+  if(!items.length){ toast('没有选中任何文件', 'err'); return; }
+  fetch('/api/rename_batch', {
+    method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({ items })
+  }).then(r => r.json()).then(d => {
+    renameBatchDlg.close();
+    const okN = d.count || 0, badN = d.failed_count || 0;
+    if(okN) toast(`已重命名 ${okN} 个文件`);
+    if(badN) toast(`${badN} 个失败：${d.failed[0].err}`, 'err', 6000);
+    if(okN){
+      // 拉取最新报告，路径已同步，无需重新扫描
+      fetch('/api/status').then(r => r.json()).then(s => {
+        if(s.status === 'done'){ result = s.result; render(); }
+      });
+    }
+  }).catch(() => { renameBatchDlg.close(); toast('请求失败', 'err'); });
 }
 
 /* ================= 历史记录 ================= */
