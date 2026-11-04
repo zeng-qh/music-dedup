@@ -447,8 +447,10 @@ def human(n):
 def do_scan(opts):
     threshold = float(opts.get("threshold", 0.85))
     algo = opts.get("match_algo", "sequence")
+    trash_dir = MUSIC_ROOT / ".trash"
     files = [p for p in MUSIC_ROOT.rglob("*")
-             if p.is_file() and p.suffix.lower() in AUDIO_EXTS]
+             if p.is_file() and p.suffix.lower() in AUDIO_EXTS
+             and trash_dir not in p.parents]   # 回收目录里的文件不算曲库
     state["progress"] = f"扫描到 {len(files)} 个音频文件，正在分组…"
 
     # 归一化名字：跨格式匹配关闭时，把扩展名重新拼回名字，避免 flac/wav 被归一成同名

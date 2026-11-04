@@ -1173,27 +1173,8 @@ function render(){
   $('footNote').textContent = `${fmtNum(result.total_files)} 个文件`;
 
   // 默认决策：按「默认勾选建议删除项」配置决定是否预选非推荐版本
-  const preselect = (result.options && result.options.preselect) !== false;
-  const tol = Number((result.options && result.options.dur_tolerance) || 3);
   selected.clear();
-  if(preselect){
-    // 低码率组没有「推荐保留」，不自动勾选，避免误删
-    [...result.sim.filter(g => g.kind !== 'low').flatMap(g=>g.files),
-     ...result.hash.flatMap(g=>g.files)]
-      .forEach(f => { if(!f.keep) selected.add(f.path); });
-    // 时长明显偏离主流的版本（如 185s 的现场加长版混在 30s 单曲组里）
-    // 默认取消勾选：这类文件与组内其他成员很可能不是同一版本，删了就是永久丢失
-    result.sim.filter(g => g.dur_warn).forEach(g => {
-      const durs = g.files.map(f => f.duration).filter(Boolean);
-      if(durs.length < 2) return;
-      const median = durs.slice().sort((a,b)=>a-b)[Math.floor(durs.length/2)];
-      g.files.forEach(f => {
-        if(f.keep || !f.duration) return;
-        if(Math.abs(f.duration - median) > tol) selected.delete(f.path);
-      });
-    });
-  }
-  // 不预选时 selected 为空，所有行显示为「保留」，由用户在界面上自行标记要删的
+  if((result.options && result.options.preselect) !== false) applyRecommended(false);
 
   const nLow = result.sim.filter(g => g.kind === 'low').length;
   const nSimGroup = result.sim.length - nLow;
@@ -1222,6 +1203,10 @@ function render(){
         ${nLow ? `<button aria-pressed="${filter==='low'}" onclick="setFilter('low')">低码率</button>` : ''}
       </div>
       <div class="toolbar-right">
+        <button class="btn btn-primary btn-sm" onclick="applyAllRecommended(this)"
+                title="把所有分组恢复为服务端推荐：每组只保留音质/版本最优的一份，其余标记删除（时长异常的版本仍会豁免）">
+          保留推荐版本
+        </button>
         <button class="btn btn-ghost btn-sm" onclick="expandAll(true)">展开全部</button>
         <button class="btn btn-ghost btn-sm" onclick="expandAll(false)">收起全部</button>
       </div>
@@ -1434,13 +1419,43 @@ function hideRow(btn){
   row.remove();
   updateBar();
 }
+/* ================= 一键应用推荐决策 ================= */
+function applyRecommended(renderAfter){
+  // 计算服务端推荐集：每组只留推荐版本，其余标记删除；
+  // 低码率组没有「推荐」概念，整组跳过不勾；
+  // 时长明显偏离组内主流的版本豁免（很可能不是同一录音，删了就是永久丢失）
+  const tol = Number((result.options && result.options.dur_tolerance) || 3);
+  const judge = [...result.sim.filter(g => g.kind !== 'low').flatMap(g=>g.files),
+                 ...result.hash.flatMap(g=>g.files)];
+  selected.clear();
+  judge.forEach(f => { if(!f.keep) selected.add(f.path); });
+  result.sim.filter(g => g.dur_warn).forEach(g => {
+    const durs = g.files.map(f => f.duration).filter(Boolean);
+    if(durs.length < 2) return;
+    const median = durs.slice().sort((a,b)=>a-b)[Math.floor(durs.length/2)];
+    g.files.forEach(f => {
+      if(f.keep || !f.duration) return;
+      if(Math.abs(f.duration - median) > tol) selected.delete(f.path);
+    });
+  });
+  if(renderAfter){ renderList(); updateBar(); }
+}
+
+function applyAllRecommended(btn){
+  if(!result) return;
+  applyRecommended(true);
+  const n = selected.size;
+  if(btn){ btn.blur(); }
+  toast(n ? `已按推荐版本勾选：${n} 个文件标记删除` : '所有分组均无冗余文件，无需删除');
+}
+
 function resetDecisions(){
   if(!result) return;
   const preselect = (result.options && result.options.preselect) !== false;
   selected.clear();
   if(preselect){
-    [...result.sim.flatMap(g=>g.files), ...result.hash.flatMap(g=>g.files)]
-      .forEach(f => { if(!f.keep) selected.add(f.path); });
+    // 与推荐集保持一致（含时长豁免）
+    applyRecommended(false);
   }
   renderList();
   updateBar();
