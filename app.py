@@ -13,8 +13,12 @@ AUDIO_EXTS = {".mp3", ".flac", ".wav", ".ape", ".aac", ".m4a", ".ogg",
               ".wma", ".opus", ".alac", ".dsd", ".dff", ".dsf"}
 LOSSLESS = {".flac", ".wav", ".ape", ".alac", ".dsd", ".dff", ".dsf"}
 NOISE = [r"\[.*?\]", r"\(.*?\)", r"（.*?）", r"【.*?】",
-         r"(?i)\b(320k|128k|192k|256k|flac|mp3|无损|高音质|高品质|HQ|SQ|live|现场版|remix|cover)\b",
-         r"(?i)(网易云音乐|QQ音乐|酷狗|酷我|咪咕|虾米)", r"[_\-\.]+"]
+         # 英文标记：需要词边界，避免误伤 delivery / alive 等
+         r"(?i)\b(320k|128k|192k|256k|flac|mp3|hq|sq|live|lives|unplugged|remix|cover|demo|acoustic)\b",
+         # 中文标记：中文无词边界，直接匹配
+         r"(无损|高音质|高品质|现场版|現場版|现场|現場|演唱会版|演唱會版|演唱会|演唱會|音乐会|音樂會|巡演|巡迴|试听|試聽)",
+         r"(?i)(网易云音乐|QQ音乐|酷狗|酷我|咪咕|虾米)",
+         r"[_\-\.]+"]
 CHUNK = 1024 * 1024
 
 app = Flask(__name__)
@@ -61,9 +65,35 @@ def read_bitrate(path):
     return None
 
 
+def is_live(name):
+    """判断是否为现场版：live / 現場 / 演唱会 / 音乐会 / unplugged 现场等"""
+    s = name.lower()
+    # 明确标注为现场的标记（含中文、英文、常见括号写法）
+    live_pat = re.compile(
+        r"(?<![\w])(live|lives|live\s*version|unplugged|concert|in\s*concert)"
+        r"|现场|現場|演唱会|演唱會|音乐会|音樂會|现场版|現場版|演唱会版|巡演|巡迴"
+        r"|\(live\)|\[live\]|【live】|（live）|\[现场\]|\(现场\)|【现场】|（现场）",
+        re.IGNORECASE)
+    # 排除：live at / live in 后接地名也算现场；但 "delivery/alive" 等误判由 \b 处理
+    return bool(live_pat.search(s))
+
+
 def qscore(path, br):
-    s = 100000 if path.suffix.lower() in LOSSLESS else 0
-    return s + (br or 0) + path.stat().st_size / (100 * 1024 * 1024)
+    """综合评分：录音类型优先于音质
+    现场版（live）存在观众噪声与现场混响，即使码率更高也劣于录音室版本。
+    分层权重：录音室 3e7 > 未知 2e7 > 现场 1e7，层内再比无损与码率。
+    """
+    name = path.name
+    if is_live(name):
+        tier = 10000000          # 现场版：最低优先级
+    else:
+        tier = 30000000          # 录音室/普通版本：最高优先级
+    s = tier
+    if path.suffix.lower() in LOSSLESS:
+        s += 100000
+    s += (br or 0)
+    s += path.stat().st_size / (100 * 1024 * 1024)
+    return s
 
 
 def md5_of(path):
@@ -151,6 +181,7 @@ def do_scan(threshold):
             "name": nmap[info[0][0]] or info[0][0].stem,
             "files": [{"path": str(p), "ext": p.suffix.lower(),
                        "bitrate": br, "size": p.stat().st_size,
+                       "live": is_live(p.name),
                        "size_h": human(p.stat().st_size),
                        "keep": i == 0} for i, (p, br) in enumerate(info)]
         })

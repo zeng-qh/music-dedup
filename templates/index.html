@@ -921,24 +921,27 @@ function groupHTML(g, gi){
       </span>
     </button>
     <div class="group-body">
-      ${g.files.map(f => fileRowHTML(f, g.kind)).join('')}
+      ${g.files.map(f => fileRowHTML(f, g.kind, g.files)).join('')}
       <div class="group-actions">
         <button class="btn btn-ghost btn-sm" onclick="groupAllKeep(this)">全部保留</button>
-        <button class="btn btn-ghost btn-sm" onclick="groupAllDel(this)">仅保留音质最高</button>
+        <button class="btn btn-ghost btn-sm" onclick="groupAllDel(this)">仅保留推荐版本</button>
       </div>
     </div>
   </section>`;
 }
 
-function fileRowHTML(f, kind){
+function fileRowHTML(f, kind, group){
   const isKeep = f.keep;
+  // 组内存在现场版时，保留理由显示为「专辑版保留」而非「音质最高」
+  const isLiveGroup = !!(group && group.some(x => x.live));
   const name = f.path.split('/').pop();
   const dir = f.path.slice(0, f.path.length - name.length - 1) || '/';
   return `<div class="filerow" data-path="${esc(f.path)}" data-keep="${isKeep?1:0}" data-size="${f.size||0}">
     <div class="fname">
       <div class="fname-main">
         <span class="nm" title="${esc(name)}">${esc(name)}</span>
-        ${isKeep ? '<span class="pill pill-ok" style="flex:none">音质最高</span>' : ''}
+        ${isKeep ? '<span class="pill pill-ok" style="flex:none">' + (isLiveGroup ? '专辑版保留' : '音质最高') + '</span>' : ''}
+        ${(!isKeep && f.live) ? '<span class="pill pill-neutral" style="flex:none" title="现场版有观众噪声与混响，优先保留专辑版">Live</span>' : ''}
       </div>
       <div class="fname-sub" title="${esc(dir)}">${esc(dir)}</div>
     </div>
